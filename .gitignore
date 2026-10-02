@@ -1,0 +1,4 @@
+node_modules/
+.orig-pi-ai.tgz
+.orig-data-tmp/
+*.tgz

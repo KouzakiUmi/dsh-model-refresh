@@ -1,0 +1,8 @@
+# dsh-model-refresh —— 自我挂载（只 insert 本插件一行）
+#
+# 插件不在此声明任何 provider / 模型配置：它只做「拉取 + 合并 + 落盘」，
+# 产出的 models 片段写入 ~/.dsh/model-refresh/，由 profile 的 cordis.patch.yml
+# 决定是否（以及如何）接到 llm-pi-ai 路由上。见 README。
+- insert:
+    - id: model-refresh
+      name: dsh-model-refresh
