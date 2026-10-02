@@ -23,11 +23,14 @@ type RouteStatus = {
   fetchedAt?: string
   installedAt?: string | null
   source?: string // 'models.dev' | 'litellm' | 'none'
+  official?: string // 'verified' | 'no-key' | 'failed' | 'unconfigured'
+  officialAdded?: string[] // 官方接口补缺（目录与上游全无）
   models?: number
   added?: string[]
   updated?: string[]
   stale?: string[]
   excluded?: string[]
+  unverified?: string[] // 官方接口核对剔除的"新增"
 }
 
 type Status = {
@@ -46,6 +49,7 @@ type Status = {
     patchCatalog: boolean
     removeStale: boolean
     litellmEnabled: boolean
+    officialVerify: boolean
     proxyConfigured: boolean
     outputDir?: string
   }
@@ -198,6 +202,17 @@ function RouteCard(props: {
     }
     return null
   })()
+  const officialBadge = (() => {
+    if (r.official === 'verified') {
+      return <span style={{ ...badgeStyle, borderColor: '#22c55e', color: '#22c55e' }}>官方已核对</span>
+    }
+    if (r.official === 'no-key' || r.official === 'failed') {
+      return <span style={{ ...badgeStyle, borderColor: '#b8860b', color: '#b8860b' }}>
+        官方未核对{r.official === 'no-key' ? '（缺 key）' : '（拉取失败）'}
+      </span>
+    }
+    return null
+  })()
   return (
     <div style={box}>
       <div
@@ -220,6 +235,7 @@ function RouteCard(props: {
           {r.route}
         </label>
         {sourceBadge}
+        {officialBadge}
         {r.models !== undefined && <span style={{ fontSize: 13 }}>{r.models} 个模型</span>}
         {!r.enabled && <span style={{ ...muted, color: '#b8860b' }}>已停用</span>}
         <span style={muted}>数据时间：{fmtTime(r.fetchedAt)}</span>
@@ -234,8 +250,19 @@ function RouteCard(props: {
           )}
           {r.added !== undefined ? (
             <div style={{ fontSize: 13, lineHeight: 1.9 }}>
+              {(r.officialAdded?.length ?? 0) > 0 && (
+                <div style={{ color: '#22c55e' }}>
+                  官方接口补缺 {r.officialAdded?.length}（目录与所有上游都没有，按官方 /models 加入）：
+                  <span style={muted}>{r.officialAdded?.join(', ')}</span>
+                </div>
+              )}
               <div>新增 {r.added.length}：<span style={muted}>{r.added.join(', ') || '—'}</span></div>
               <div>刷新 {r.updated?.length ?? 0} · 过时 {r.stale?.length ?? 0} · 排除 {r.excluded?.length ?? 0}</div>
+              {(r.unverified?.length ?? 0) > 0 && (
+                <div style={{ color: '#b8860b' }}>
+                  官方接口未确认、已剔除 {r.unverified?.length}：<span style={muted}>{r.unverified?.join(', ')}</span>
+                </div>
+              )}
               {(r.stale?.length ?? 0) > 0 && (
                 <div>过时（上游已移除、默认保留）：<span style={muted}>{r.stale?.join(', ')}</span></div>
               )}
@@ -272,6 +299,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const [patchCatalog, setPatchCatalog] = useState(true)
   const [removeStale, setRemoveStale] = useState(false)
   const [litellmEnabled, setLitellmEnabled] = useState(true)
+  const [officialVerify, setOfficialVerify] = useState(true)
   const [draftReady, setDraftReady] = useState(false)
 
   const reload = useCallback(async () => {
@@ -286,6 +314,7 @@ export function ModelRefreshSettings(): JSX.Element {
         setPatchCatalog(next.settings.patchCatalog)
         setRemoveStale(next.settings.removeStale)
         setLitellmEnabled(next.settings.litellmEnabled)
+        setOfficialVerify(next.settings.officialVerify)
         setDraftReady(true)
       }
     } catch (e) {
@@ -318,6 +347,7 @@ export function ModelRefreshSettings(): JSX.Element {
         patchCatalog,
         removeStale,
         litellmEnabled,
+        officialVerify,
       })
       setDraftReady(false)
       await reload()
@@ -460,6 +490,16 @@ export function ModelRefreshSettings(): JSX.Element {
                   onChange={(e) => setLitellmEnabled(e.target.checked)}
                 />
                 LiteLLM 第二上游（models.dev 没数据的 provider 从 LiteLLM 补缺）
+              </label>
+            </div>
+            <div style={row}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={officialVerify}
+                  onChange={(e) => setOfficialVerify(e.target.checked)}
+                />
+                官方接口核对与补缺（GET /models 权威清单：修正误报过时、剔除幽灵新增、补入官方新模型）
               </label>
             </div>
             <div style={{ ...row, marginTop: 8 }}>
