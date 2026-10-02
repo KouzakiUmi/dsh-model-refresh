@@ -94,4 +94,43 @@ assert.ok(gw.next["openai-completions"]["claude-fable-5"] !== undefined, "原有
 assert.ok(gw.next["openai-completions"]["workers-ai/@cf/meta/llama-3.1-8b"] !== undefined);
 console.log("namespace-mismatch defense ok");
 
+// --- removeStale：先备份后删除（错位保护）+ 恢复 ---
+import { removeStaleFromCatalog, restoreStaleToCatalog, namespacePair } from "../lib/catalog-patch.mjs";
+
+assert.ok(namespacePair("anthropic/claude-fable-5", "claude-fable-5"));
+assert.ok(namespacePair("workers-ai/@cf/meta/llama", "@cf/meta/llama"));
+assert.ok(!namespacePair("claude-fable-5", "claude-opus-5"), "不同模型不算错位");
+assert.ok(!namespacePair("a", "a"));
+console.log("namespacePair ok");
+
+const staleCat = {
+  "openai-completions": {
+    "old-model": { id: "old-model", name: "Old", api: "openai-completions", baseUrl: "https://x/v1", contextWindow: 1, maxTokens: 1 },
+    "claude-fable-5": { id: "claude-fable-5", name: "CF5", contextWindow: 1, maxTokens: 1 }
+  }
+};
+const rm = removeStaleFromCatalog(staleCat, ["old-model", "claude-fable-5"], ["anthropic/claude-fable-5"]);
+assert.deepStrictEqual(rm.removed.map((x) => x.id), ["old-model"], "真过时条目被删");
+assert.deepStrictEqual(rm.skipped, ["claude-fable-5"], "错位保护：与 added 对应的不删");
+assert.ok(rm.next["openai-completions"]["old-model"] === undefined);
+assert.ok(rm.next["openai-completions"]["claude-fable-5"] !== undefined);
+assert.strictEqual(rm.backups["old-model"].group, "openai-completions");
+assert.strictEqual(rm.backups["old-model"].entry.api, "openai-completions", "备份含完整 vendor 字段");
+assert.deepStrictEqual(staleCat["openai-completions"]["old-model"] !== undefined, true, "入参不被修改");
+console.log("removeStaleFromCatalog ok");
+
+// 恢复：备份条目回原组；同 id 已存在不覆盖
+const rs = restoreStaleToCatalog(rm.next, rm.backups);
+assert.deepStrictEqual(rs.restored, ["old-model"]);
+assert.deepStrictEqual(rs.next["openai-completions"]["old-model"], rm.backups["old-model"].entry, "条目逐字段还原");
+const conflict = restoreStaleToCatalog(
+  { "openai-completions": { "old-model": { id: "old-model", name: "NEWER" } } },
+  { "old-model": { group: "openai-completions", entry: { id: "old-model", name: "OLD" } } }
+);
+assert.deepStrictEqual(conflict.restored, [], "现有条目不被备份覆盖");
+assert.strictEqual(conflict.next["openai-completions"]["old-model"].name, "NEWER");
+const noGroup = restoreStaleToCatalog({}, { "lost": { group: "some-group", entry: { id: "lost", name: "L" } } });
+assert.deepStrictEqual(noGroup.restored, ["lost"], "组缺失时重建组");
+console.log("restoreStaleToCatalog ok");
+
 console.log("ALL CATALOG-PATCH TESTS PASSED");

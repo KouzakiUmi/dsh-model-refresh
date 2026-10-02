@@ -43,6 +43,7 @@ type Status = {
     intervalMinutes: number
     proxyUrl: string
     patchCatalog: boolean
+    removeStale: boolean
     proxyConfigured: boolean
     outputDir?: string
   }
@@ -244,6 +245,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const [interval, setInterval_] = useState('')
   const [proxyUrl, setProxyUrl] = useState('')
   const [patchCatalog, setPatchCatalog] = useState(true)
+  const [removeStale, setRemoveStale] = useState(false)
   const [draftReady, setDraftReady] = useState(false)
 
   const reload = useCallback(async () => {
@@ -256,6 +258,7 @@ export function ModelRefreshSettings(): JSX.Element {
         setInterval_(String(next.settings.intervalMinutes))
         setProxyUrl(next.settings.proxyUrl)
         setPatchCatalog(next.settings.patchCatalog)
+        setRemoveStale(next.settings.removeStale)
         setDraftReady(true)
       }
     } catch (e) {
@@ -286,6 +289,7 @@ export function ModelRefreshSettings(): JSX.Element {
         intervalMinutes: Number(interval) || 360,
         proxyUrl,
         patchCatalog,
+        removeStale,
       })
       setDraftReady(false)
       await reload()
@@ -405,6 +409,20 @@ export function ModelRefreshSettings(): JSX.Element {
                 />
                 把新模型写入安装树 catalog（需要目录写权限）
               </label>
+            </div>
+            <div style={row}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={removeStale}
+                  onChange={(e) => setRemoveStale(e.target.checked)}
+                />
+                移除过时模型
+              </label>
+              <span style={{ ...muted, flexBasis: '100%' }}>
+                models.dev 已移除的 id：从模型列表剔除，并从安装目录删除（删除前完整备份，关闭本开关即恢复；
+                与新增 id 构成命名空间对应的除外——那是上游换了 id 体系，不是真过时）
+              </span>
             </div>
             <div style={{ ...row, marginTop: 8 }}>
               <button style={button} disabled={busy} onClick={() => void saveConfig()}>

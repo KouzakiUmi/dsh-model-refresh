@@ -77,4 +77,16 @@ assert.strictEqual(empty.models.length, Object.keys(installed).length);
 assert.strictEqual(empty.diff.added.length, 0);
 console.log("empty-fresh passthrough ok:", empty.models.length, "models");
 
+// 4) dropStale（设置页"移除过时模型"开关）：stale 剔除、diff 仍记录、keep 白名单豁免
+const dropped = mergeRoute(installed, fresh, { dropStale: true });
+const droppedIds = new Set(dropped.models.map((m) => m.id));
+assert.ok(!droppedIds.has("glm-5.1"), "dropStale 应剔除 stale id");
+assert.ok(dropped.diff.stale.includes("glm-5.1"), "diff.stale 照记供展示");
+assert.ok(droppedIds.has("minimax-m3") && droppedIds.has("gpt-6-luna"), "known/added 不受影响");
+assert.strictEqual(dropped.models.length, Object.keys(installed).length - dropped.diff.stale.length + dropped.diff.added.length);
+
+const keptStale = mergeRoute(installed, fresh, { dropStale: true, keep: ["glm-5.1"] });
+assert.ok(keptStale.models.some((m) => m.id === "glm-5.1"), "keep 白名单豁免 dropStale");
+console.log(`dropStale ok: ${dropped.models.length} models (stale ${dropped.diff.stale.length} dropped)`);
+
 console.log("\nALL MERGE TESTS PASSED");

@@ -38,7 +38,9 @@ scripts/build-client.mjs 构建（react 保持 external，ModuleLoader wrapper�
   `POST .../config`、`POST .../route`；
 - **设置页**：Settings 里的「模型刷新」区 —— 每 provider 开关（禁用即回滚
   catalog patch 并把产物回退为安装目录快照）、拉取监控（lastRun/diff/错误）、
-  endpoint / 间隔 / 代理 / patchCatalog 开关、立即刷新按钮；
+  endpoint / 间隔 / 代理 / patchCatalog / removeStale 开关、立即刷新按钮；
+  provider 卡片默认折叠（点头部 ⬇️ 展开详情），授权命令在独立弹窗带复制按钮
+  （v0.3）。
 - **代理**：`proxyUrl` 经 undici `ProxyAgent`（仅本插件的 fetch，不碰全局）；
   仅 http(s)，拒绝内嵌凭据；
 - **catalog patch**（默认开，可在设置页关）：对每个 enabled route 两件事——
@@ -99,7 +101,12 @@ icacls 授权 → 重启 DSH（插件 v0.2 运行 + patch catalog）→ 再重�
   产物只投影 route 允许字段（vendor 级字段一律不进）；
 - 新 id：models.dev 安全字段 + 容量必须齐全（缺失跳过），catalog patch 用
   完整条目写安装树；
-- 上游移除的 id：默认保留（防抖动），diff 标 `stale`，决定后加进 `exclude`。
+- 上游移除的 id（stale）：默认保留（防抖动），diff 标 `stale`，决定后加进
+  `exclude`。设置页**「移除过时模型」开关**（`settings.removeStale`，v0.3）
+  打开后：产物剔除 stale（`keep` 白名单豁免），安装目录里的 stale 条目在
+  **完整备份到 `state.runtime.catalogRemoved`** 后删除——关开关 / 禁用该
+  provider 即从备份逐字段恢复（绝不覆盖现有条目）；与 added 构成命名空间
+  对应的 stale 不删（上游换 id 体系，不是真过时）。
 
 ## 构建/测试
 

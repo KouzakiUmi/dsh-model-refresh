@@ -1,9 +1,9 @@
 {
   "name": "dsh-model-refresh",
   "displayName": "模型目录刷新（models.dev → pi-ai 路由）",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "定时从 models.dev 拉取最新模型数据，与已安装 pi-ai catalog 合并生成 llm-pi-ai 路由 models 片段，并（经用户授权）把新模型合入安装树 catalog；带设置页（provider 开关 / 拉取监控 / 代理）。",
+  "description": "定时从 models.dev 拉取最新模型数据，与已安装 pi-ai catalog 合并生成 llm-pi-ai 路由 models 片段，并（经用户授权）把新模型合入安装树 catalog；带设置页（provider 开关 / 拉取监控 / 代理 / 移除过时模型）。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
