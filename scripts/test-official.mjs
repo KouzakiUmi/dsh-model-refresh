@@ -45,6 +45,42 @@ assert.strictEqual(calls[0].init.headers.authorization, "Bearer sk-test");
 await assert.rejects(() => fetchOfficialIds("https://x.cn/v1", undefined, okFetch),
   (e) => e.code === "MISSING_KEY", "缺 key 抛 MISSING_KEY");
 await assert.rejects(() => fetchOfficialIds("https://x.cn/v1", "k", async () => ({ ok: false, status: 401 })));
+
+// --- Anthropic 风格路径回退（kimi/fireworks/vercel 实测：/models 404 → /v1/models 命中） ---
+const seen = [];
+const fbFetch = async (url, init) => {
+  seen.push(url);
+  if (url.endsWith("/coding/models")) return { ok: false, status: 404, json: async () => ({}) };
+  if (url.endsWith("/coding/v1/models")) return { ok: true, status: 200, json: async () => ({ data: [{ id: "k3" }] }) };
+  throw new Error(`unexpected ${url}`);
+};
+const fbIds = await fetchOfficialIds("https://api.kimi.com/coding", "sk", fbFetch);
+assert.deepStrictEqual([...fbIds], ["k3"]);
+assert.deepStrictEqual(seen, ["https://api.kimi.com/coding/models", "https://api.kimi.com/coding/v1/models"],
+  "404 → 回退 /v1/models（200 命中即停）");
+console.log("anthropic-style fallback ok");
+
+// /v1 结尾不重复拼 v1（只试一个候选）
+const v1Seen = [];
+await fetchOfficialIds("https://api.together.ai/v1", "sk", async (url, _i) => {
+  v1Seen.push(url);
+  return { ok: true, status: 200, json: async () => ({ data: [{ id: "m" }] }) };
+});
+assert.deepStrictEqual(v1Seen, ["https://api.together.ai/v1/models"], "v1 结尾单候选");
+console.log("v1-suffix single candidate ok");
+
+// 401 优先于 404 报出（路径存在但 key 被拒是主因）；全 404 报 not found
+await assert.rejects(
+  () => fetchOfficialIds("https://y.cn/coding", "sk", async (url) => ({
+    ok: false, status: url.endsWith("/models") && !url.includes("/v1/") ? 404 : 401
+  })),
+  (e) => e.code === "INVALID_KEY", "401 优先报出（鉴权错误是主因）"
+);
+await assert.rejects(
+  () => fetchOfficialIds("https://y.cn", "sk", async () => ({ ok: false, status: 404 })),
+  /not found/, "全 404 报端点不存在"
+);
+console.log("error precedence ok");
 console.log("fetchOfficialIds ok");
 
 // --- 容量众数策略 ---

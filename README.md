@@ -44,7 +44,14 @@ v0.2 起**自动发现安装目录的全部 provider route**（本机 41 条）�
      新模型而 pi-ai 内置库全无数据时，下一轮刷新即可用；
    - 没 key / 拉取失败 / 无 baseUrl → fail-soft 跳过核对，
      `perRoute.official` 记状态（`verified`/`no-key`/`failed`/`unconfigured`），
-     设置页徽标标注"官方已核对 / 官方未核对"；
+     设置页徽标标注"官方已核对 / 官方未核对"。
+     **端点路径核查**（2026-10-03 实测，`scripts/probe-official-endpoints.mjs`）：
+     catalog baseUrl 语义因 vendor 而异——OpenAI 风格已带 `/v1`（together、
+     qwen-token-plan×3、zai 直拼 `/models` 命中 401）；**Anthropic 风格不带**
+     （kimi-coding `/coding`、fireworks `/inference`、vercel 裸域名，直拼 404）
+     → `fetchOfficialIds` 走候选序列 `{base}/models` →（无版本段时）
+     `{base}/v1/models`：404 换下一个，401/403 视为"路径存在、key 被拒"
+     优先报出。**8/8 route 端点全部命中**；
 4. **无上游数据源**（`ant-ling`、`radius`、`openai-codex`）：上游与官方
    都没有 → 标注 `source: 'none'`，只展示安装目录快照，等 pi-ai 整包升级。
 
@@ -156,6 +163,7 @@ node scripts/verify-expression.mjs # 对真实产物跑接线表达式
 node scripts/test-integration.mjs  # 全链路离线集成（fixture 服务器）
 node scripts/test-litellm.mjs      # LiteLLM 适配器（含真实网络 id 对齐断言）
 node scripts/test-official.mjs     # 官方核对/补缺（注入 fetch，含 merge 语义）
+node scripts/probe-official-endpoints.mjs # 实测全部官方端点路径（无 key 探测）
 node scripts/restore-all.mjs <data-dir> # 从 npm 原包全量恢复安装树（事故恢复用）
 ```
 
