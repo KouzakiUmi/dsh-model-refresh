@@ -18,6 +18,27 @@ v0.2 起**自动发现安装目录的全部 provider route**（本机 41 条）�
   全目录共享协议，而 opencode-go 是多协议路由）→ 新模型必须进安装树
   catalog 才能干净落地，这正是 v0.2 catalog patch 的依据。
 
+## 数据源（v0.4：两级上游 + 无源标注）
+
+1. **models.dev**（主源，pi-ai 自己的上游）：226 个 provider，覆盖本机
+   41 个 route 中的 29 个；
+2. **LiteLLM**（第二上游，[BerriAI/litellm](https://github.com/BerriAI/litellm)
+   的 `model_prices_and_context_window.json`，MIT，GitHub raw 直链）：
+   models.dev 没数据的 route 按内置前缀映射补缺（`fireworks`→`fireworks_ai`、
+   `together`→`together_ai`、`azure-openai-responses`→`azure`、
+   `vercel-ai-gateway`→`vercel_ai_gateway`、`zai-coding-cn`→`zai`、
+   `qwen-token-plan*`→`dashscope`、`kimi-coding`→`moonshot`），id 剥前缀后
+   与安装目录对齐（test-litellm 真实网络断言 22 个 id 命中）。
+   **litellm 来源只做已知 id 元数据刷新与列表展示**：litellm 无
+   wire-protocol 信息，added 不进 catalog patch；其数据集覆盖不全 →
+   stale 不可信，不参与 removeStale；
+3. **无上游数据源**（`ant-ling`、`radius`、`openai-codex`）：两源都没有，
+   标注 `source: 'none'` —— 设置页显示"无上游数据源"徽标，只展示安装目录
+   快照，等 pi-ai 整包升级。
+
+设置页每个 provider 卡片带数据源徽标（models.dev / LiteLLM 补 / 无上游
+数据源），全局设置有 LiteLLM 开关（`litellmEnabled`，默认开）。
+
 ## v0.2 架构
 
 ```
@@ -25,6 +46,7 @@ lib/index.js        Host：定时刷新 + 代理 fetch + catalog patch + Web 路
 lib/merge.mjs       纯函数合并（已知 id 白名单投影 + 新 id 安全字段）
 lib/state.mjs       插件自管状态 ~/.dsh/model-refresh/state.json（原子写）
 lib/catalog-patch.mjs 安装树 data JSON 增量合入/回滚（纯函数）
+lib/litellm.mjs    LiteLLM 第二上游适配器（纯函数，前缀剥离 + 形状转换）
 src/client/index.tsx 设置页（React；esbuild 构建 → lib/client.js）
 scripts/build-client.mjs 构建（react 保持 external，ModuleLoader wrapper）
 ```
@@ -118,6 +140,7 @@ node scripts/smoke.mjs             # stub ctx 冒烟（真实网络拉取，不�
 node scripts/test-expression.mjs   # !!js 求值语义复刻
 node scripts/verify-expression.mjs # 对真实产物跑接线表达式
 node scripts/test-integration.mjs  # 全链路离线集成（fixture 服务器）
+node scripts/test-litellm.mjs      # LiteLLM 适配器（含真实网络 id 对齐断言）
 node scripts/restore-all.mjs <data-dir> # 从 npm 原包全量恢复安装树（事故恢复用）
 ```
 

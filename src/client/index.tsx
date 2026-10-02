@@ -22,6 +22,7 @@ type RouteStatus = {
   // runtime 部分（可能缺失）
   fetchedAt?: string
   installedAt?: string | null
+  source?: string // 'models.dev' | 'litellm' | 'none'
   models?: number
   added?: string[]
   updated?: string[]
@@ -44,6 +45,7 @@ type Status = {
     proxyUrl: string
     patchCatalog: boolean
     removeStale: boolean
+    litellmEnabled: boolean
     proxyConfigured: boolean
     outputDir?: string
   }
@@ -180,6 +182,22 @@ function RouteCard(props: {
   onEnable: (enabled: boolean) => void
 }) {
   const { r, busy, expanded } = props
+  const badgeStyle: CSSProperties = {
+    fontSize: 11, padding: '1px 8px', borderRadius: 999,
+    border: '1px solid var(--dsh-border, #333)', opacity: 0.9,
+  }
+  const sourceBadge = (() => {
+    if (r.source === 'models.dev') {
+      return <span style={{ ...badgeStyle, opacity: 0.7 }}>models.dev</span>
+    }
+    if (r.source === 'litellm') {
+      return <span style={{ ...badgeStyle, borderColor: '#3b82f6', color: '#3b82f6' }}>LiteLLM 补</span>
+    }
+    if (r.source === 'none') {
+      return <span style={{ ...badgeStyle, borderColor: '#b8860b', color: '#b8860b' }}>无上游数据源</span>
+    }
+    return null
+  })()
   return (
     <div style={box}>
       <div
@@ -201,12 +219,19 @@ function RouteCard(props: {
           />
           {r.route}
         </label>
+        {sourceBadge}
         {r.models !== undefined && <span style={{ fontSize: 13 }}>{r.models} 个模型</span>}
         {!r.enabled && <span style={{ ...muted, color: '#b8860b' }}>已停用</span>}
         <span style={muted}>数据时间：{fmtTime(r.fetchedAt)}</span>
       </div>
       {expanded && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--dsh-border, #333)' }}>
+          {r.source === 'none' && (
+            <div style={{ ...muted, marginBottom: 6 }}>
+              models.dev 与 LiteLLM 均无此 provider 的数据：只显示安装目录快照，不做上游合并
+              （该 provider 无公开数据源，等 pi-ai 整包升级）。
+            </div>
+          )}
           {r.added !== undefined ? (
             <div style={{ fontSize: 13, lineHeight: 1.9 }}>
               <div>新增 {r.added.length}：<span style={muted}>{r.added.join(', ') || '—'}</span></div>
@@ -246,6 +271,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const [proxyUrl, setProxyUrl] = useState('')
   const [patchCatalog, setPatchCatalog] = useState(true)
   const [removeStale, setRemoveStale] = useState(false)
+  const [litellmEnabled, setLitellmEnabled] = useState(true)
   const [draftReady, setDraftReady] = useState(false)
 
   const reload = useCallback(async () => {
@@ -259,6 +285,7 @@ export function ModelRefreshSettings(): JSX.Element {
         setProxyUrl(next.settings.proxyUrl)
         setPatchCatalog(next.settings.patchCatalog)
         setRemoveStale(next.settings.removeStale)
+        setLitellmEnabled(next.settings.litellmEnabled)
         setDraftReady(true)
       }
     } catch (e) {
@@ -290,6 +317,7 @@ export function ModelRefreshSettings(): JSX.Element {
         proxyUrl,
         patchCatalog,
         removeStale,
+        litellmEnabled,
       })
       setDraftReady(false)
       await reload()
@@ -423,6 +451,16 @@ export function ModelRefreshSettings(): JSX.Element {
                 models.dev 已移除的 id：从模型列表剔除，并从安装目录删除（删除前完整备份，关闭本开关即恢复；
                 与新增 id 构成命名空间对应的除外——那是上游换了 id 体系，不是真过时）
               </span>
+            </div>
+            <div style={row}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={litellmEnabled}
+                  onChange={(e) => setLitellmEnabled(e.target.checked)}
+                />
+                LiteLLM 第二上游（models.dev 没数据的 provider 从 LiteLLM 补缺）
+              </label>
             </div>
             <div style={{ ...row, marginTop: 8 }}>
               <button style={button} disabled={busy} onClick={() => void saveConfig()}>
