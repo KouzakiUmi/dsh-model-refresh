@@ -2,3 +2,12 @@ node_modules/
 .orig-pi-ai.tgz
 .orig-data-tmp/
 *.tgz
+
+# Local runtime state and developer-only overrides
+.env
+.env.*
+!.env.example
+*.local.json
+coverage/
+.DS_Store
+Thumbs.db

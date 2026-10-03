@@ -1,13 +1,14 @@
-// 真实组合预检：用真实 pi-ai catalog 目录 + 正式 state.json 的副本，
-// 在隔离 state 目录里跑完整的 v0.6.0 bootstrap + 首轮刷新（initialRefresh=true）。
+// 真实组合预检：用显式指定的 pi-ai catalog 目录 + 正式 state.json 的副本，
+// 在隔离 state 目录里跑当前版本的 bootstrap + 首轮刷新（initialRefresh=true）。
 // patchCatalog=false ⇒ 不写 pi-ai 目录；state 副本 ⇒ 不动正式状态。
 import { cpSync, mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHost } from '../lib/index.js';
 
-const dataDir = process.env.DSH_PI_AI_DATA_DIR ?? 'C:/Program Files/DSH NEXT/resources/app/node_modules/@earendil-works/pi-ai/dist/providers/data';
-const realState = process.argv[2] ?? 'C:/Users/Fractal/.dsh/model-refresh/state.json';
+const dataDir = process.env.DSH_PI_AI_DATA_DIR;
+if (!dataDir) throw new Error('DSH_PI_AI_DATA_DIR is required for live preflight; point it at the consuming pi-ai dist/providers/data directory');
+const realState = process.argv[2] ?? join(homedir(), '.dsh', 'model-refresh', 'state.json');
 const dir = mkdtempSync(join(tmpdir(), 'refresh-live-'));
 const stateFile = join(dir, 'state.json');
 

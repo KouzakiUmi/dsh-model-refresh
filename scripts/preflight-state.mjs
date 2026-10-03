@@ -1,11 +1,11 @@
-// 只读预检：把正式 state.json 复制到临时目录，验证 v0.6.0 的加载与迁移路径。
+// 只读预检：把正式 state.json 复制到临时目录，验证当前版本的加载与迁移路径。
 // 不触碰正式状态，不发任何网络请求。
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadState, STATE_VERSION } from '../lib/state.mjs';
 
-const real = process.argv[2] ?? 'C:/Users/Fractal/.dsh/model-refresh/state.json';
+const real = process.argv[2] ?? join(homedir(), '.dsh', 'model-refresh', 'state.json');
 const dir = mkdtempSync(join(tmpdir(), 'refresh-preflight-'));
 try {
   const copy = join(dir, 'state.json');

@@ -1,6 +1,52 @@
-# dsh-model-refresh · v0.6
+# dsh-model-refresh · v0.6.2
 
-将 pi-ai 静态模型目录的补缺做成可独立升级的插件。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
+将 pi-ai 静态模型目录的补缺做成可独立升级的 DSH bundle。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
+
+> 当前兼容性基线：DeepSeek Harness core `0.2.0-rc.2`。其它核心版本可能可用，但必须重新核对 bundle、Cordis 生命周期、client slot 与 pi-ai catalog 布局，不能仅凭安装成功推断兼容。
+
+## 功能概览
+
+- models.dev、LiteLLM 与 provider 官方清单相互独立，单源失败不会清空其它证据。
+- 对协议、上下文容量、输出容量和聊天用途缺少证据的新模型进入待确认，不使用邻居猜测。
+- catalog 写入默认关闭；启用后使用协调锁、写前 journal、修订指纹和内容所有权校验。
+- 删除要求权威完整清单、连续缺失确认和宽限期，失败或分页清单不会触发删除。
+- 设置页显示发现、已应用、待确认、冲突、重启需求和写入权限状态。
+- Host 生命周期持有状态租约，死进程锁可保守接管，正常关闭等待队列收敛后再释放。
+
+## 安装与接入
+
+仓库本身是一个带 `dsh.bundle.patch` 的 bundle。推荐通过当前 DSH 版本支持的插件管理入口安装；不要手工修改 DSH 核心、ASAR 或包管理器维护的依赖。若使用源码链接进行开发：
+
+```powershell
+git clone https://github.com/KouzakiUmi/dsh-model-refresh.git
+cd dsh-model-refresh
+pnpm install --frozen-lockfile
+pnpm run build:client
+pnpm test
+```
+
+然后由目标 profile 的官方插件/本地链接流程加载该目录。`cordis.patch.yml` 只插入 `dsh-model-refresh`，不会替用户修改 provider 路由。首次加载默认不写安装目录；需要在设置页显式启用 provider 与 catalog 写入。
+
+Host 或 bundle 源码变更后通常需要重载对应 DSH 消费进程。catalog 是 pi-ai 的静态导入数据，新模型写入后也需要重启消费进程才会生效。插件不会自动重启 DSH。
+
+## 快速配置
+
+首次 seed 可复制 `config.example.json` 为本地 `config.json`，或直接在设置页保存。运行时状态默认位于 `~/.dsh/model-refresh/state.json`。真实凭据值只放环境变量或 DSH credentials 服务；配置里仅填写凭据名称。
+
+```json
+{
+  "endpoint": "https://models.dev/api.json",
+  "intervalMinutes": 360,
+  "routes": [
+    {
+      "route": "opencode-go",
+      "enabled": false,
+      "keep": [],
+      "exclude": []
+    }
+  ]
+}
+```
 
 ## 重新设计的原则
 
@@ -25,7 +71,7 @@ LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
 - `lib/official.mjs`：安全鉴权、明确清单 URL 或兼容路径、响应形状验证、分页信号、容量和类型提取。仅 404 尝试下一个候选，禁止携带凭据自动重定向；401/403 直接报鉴权拒绝。
 - `lib/planner.mjs`：统一候选、pending、removals；明确非聊天类型（embedding/audio/image 等）不注入聊天路由；对象 key 与 model.id 必须相等。
 - `lib/catalog-store.mjs`：唯一临时文件、写前 journal、内容/修订校验、协调写锁、恢复未完成提交。不会用损坏桶替换原组。
-- `lib/index.js`：启动/定时/手动/配置共用队列；重复刷新去重；每轮配置快照；dispose 取消网络并清理路由；源/路由错误分别保留。
+- `lib/index.js`：启动/定时/手动/配置共用队列；重复刷新去重；每轮配置快照；dispose 先取消网络并等待队列收敛，在状态与 catalog 不再可能迟到写入后才释放生命周期租约；源/路由错误分别保留。
 - `lib/state.mjs`：v3 状态和 v1/v2 迁移，损坏 JSON / 未来版本拒绝覆盖。
 - `lib/host-{io,http,lease}.mjs`：原子持久化、严格同源 loopback Web API、有界 JSON 请求、Host 状态生命周期锁。
 - `src/client/index.tsx`：默认折叠，搜索筛选，应用/待确认/冲突监控；provider 官方端点、凭据名称、协议、完整性和容量配置；代理及全局开关；授权说明独立弹窗。
@@ -95,7 +141,7 @@ Program Files 的权限不足是**可诊断错误**，不是所有写入错误�
 ## 故障恢复边界
 
 - 目录写入前 journal 落在状态目录的 `transactions/`；catalog 已提交但 state 写失败时，下一次恢复根据 before/after hash 补台账；两者都不匹配则保留 journal 报冲突，不覆盖外部修改。
-- 状态 `.lock` 整个 Host 生命周期持有，正常 dispose 释放。**进程被强杀或崩溃可能遗留锁**：插件 fail-closed 并报锁路径/PID；先核实对应 DSH 进程已结束，再人工移走旧锁，重新加载后恢复 journal。不能在活跃 Host 运行时删除锁。
+- 状态 `.lock` 从 Host 启动持有到关闭队列完全收敛，正常 dispose 最后释放，防止替代实例与迟到的状态/catalog 写入重叠。进程被强杀或崩溃时，若锁记录 PID 已由系统确证不存在，下一实例会原子归档旧锁为 `.stale-<pid>-<时间>.bak` 后接管；活进程、无法判定 PID、损坏或不可读锁仍 fail-closed，不能在活跃 Host 运行时删除锁。
 - 同一安装目录建议只由一个配置状态管理。不同状态目录的多个 Host 不提供全局协调保证；更新/安装 pi-ai 时应停止插件消费者。非合作外部写者的检查与 rename 之间仍存在竞态，文件 API 不提供跨程序原子 CAS；不能声称绝对事务隔离。
 - 包或 manifest 修订不变、内容也完全相同的外部同版本重装无法区别所有权；检测到修订变化会保守释放，不删升级模型。
 - 旧台账保护/同步冲突需要人工核验，不能静默“清理”。损坏状态保持原文件不覆盖。
@@ -113,3 +159,33 @@ node scripts/smoke.mjs  # 安全别名：运行隔离 Host 场景，不连接真
 测试 Host controller 的真实文件/HTTP/生命周期路径，但并不等价于真实 Cordis Loader composition 或已加载设置页验收；这两项及真实凭据的官方响应应在明确部署/重载后验证，不把 stub 测试称为已测通生产环境。
 
 历史恢复脚本 `scripts/restore-all.mjs` 属于事故工具，不是测试，不运行它来验证插件。
+
+## 升级与回滚
+
+升级前停止使用同一状态目录和同一 pi-ai catalog 的所有插件消费者，并备份：
+
+- `~/.dsh/model-refresh/state.json`、同目录 transactions 与路由产物；
+- 当前插件源码或已安装版本；
+- 目标 pi-ai package/version 与 `dist/providers/data/.manifest.json`（若存在）。
+
+从 v1/v2 状态首次迁移到 v3 时，Host 会在首次写入前创建 `state.json.pre-v3-<时间戳>.bak`。回滚到不理解 v3 的旧版本前必须先停止 Host，并人工恢复对应旧状态备份；不能让旧版直接加载 v3 文件。
+
+0.6.2 调整了状态租约生命周期：正常关闭会等待队列收敛后释放；崩溃遗留锁只有在记录 PID 被系统确证不存在时才会被归档接管。不要在活跃 Host 运行时删除 `.lock`。
+
+## HTTP API
+
+设置页使用 loopback Web API：
+
+- `GET /plugins/dsh-model-refresh/status`
+- `POST /plugins/dsh-model-refresh/refresh`
+- `POST /plugins/dsh-model-refresh/config`
+- `POST /plugins/dsh-model-refresh/route`
+
+写操作要求精确同源 loopback Origin、`application/json`、64 KiB 最大请求体和 10 秒读取超时。`config` 支持 `expectedRevision` 乐观锁；第三方调用方不得绕过设置页暴露的安全限制。
+
+## 贡献与安全
+
+- 开发流程与不变量见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
+- 漏洞报告与安全边界见 [SECURITY.md](SECURITY.md)。
+- 项目使用 [MIT License](LICENSE)。

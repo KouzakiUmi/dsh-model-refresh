@@ -238,6 +238,28 @@ try {
   const diskState = await loadState(cancelling.statePath);
   assert.equal(diskState.runtime.running, false);
 
+  // Dispose must retain the state lease until even a non-cooperative queued task settles.
+  // Otherwise a replacement host can overlap late state/catalog writes from this instance.
+  let releaseOverlapFetch;
+  let markOverlapStarted;
+  const overlapStarted = new Promise((resolve) => { markOverlapStarted = resolve; });
+  const overlapBlock = new Promise((resolve) => { releaseOverlapFetch = resolve; });
+  const overlap = await setup({ fetchFn: async () => {
+    markOverlapStarted();
+    await overlapBlock; // Deliberately ignores AbortSignal to exercise lease ordering.
+    return jsonResponse({ demo: { models: {} } });
+  } });
+  const overlapRefresh = overlap.host.requestRefresh();
+  await overlapStarted;
+  const overlapDisposal = overlap.host.dispose();
+  await assert.rejects(acquireStateLease(overlap.statePath), /State lock exists/,
+    'replacement must not acquire the state lease before the old queue settles');
+  releaseOverlapFetch();
+  await assert.rejects(overlapRefresh, /disposed/);
+  await overlapDisposal;
+  const releaseAfterDrain = await acquireStateLease(overlap.statePath);
+  await releaseAfterDrain();
+
   // Regression: a bootstrap failure must degrade into a readable status route, never a 404.
   // The settings page can only explain a failure it can fetch.
   const brokenDirectory = path.join(root, `case-${++count}`);

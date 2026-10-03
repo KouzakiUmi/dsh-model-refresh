@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const tests = ['test-merge.mjs', 'test-catalog-patch.mjs', 'test-litellm.mjs', 'test-official.mjs',
-  'test-planner.mjs', 'test-store.mjs', 'test-host.mjs', 'test-integration.mjs', 'test-expression.mjs'];
+  'test-planner.mjs', 'test-store.mjs', 'test-host.mjs', 'test-lease-reclaim.mjs', 'test-integration.mjs', 'test-expression.mjs'];
 for (const test of tests) {
   console.log(`\n=== ${test} ===`);
   const result = spawnSync(process.execPath, [path.join(root, 'scripts', test)], { cwd: root, stdio: 'inherit' });

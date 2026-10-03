@@ -4,14 +4,18 @@
 // 用法：node scripts/restore-all.mjs <原包 data 目录>
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { readdirSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { applyCatalogPatch } from "../lib/catalog-patch.mjs";
 
 const origDir = process.argv[2];
-if (!origDir || !existsSync(origDir)) { console.error("usage: node scripts/restore-all.mjs <orig-data-dir>"); process.exit(1); }
-
-const DATA = "C:/Program Files/DSH NEXT/resources/app/node_modules/@earendil-works/pi-ai/dist/providers/data";
-const STATE = path.join(process.env.USERPROFILE.replaceAll("\\", "/"), ".dsh/model-refresh/state.json");
+const DATA = process.argv[3] ?? process.env.DSH_PI_AI_DATA_DIR;
+const STATE = process.argv[4] ?? process.env.DSH_MODEL_REFRESH_STATE ?? path.join(homedir(), ".dsh", "model-refresh", "state.json");
+if (!origDir || !existsSync(origDir) || !DATA || !existsSync(DATA)) {
+  console.error("usage: node scripts/restore-all.mjs <orig-data-dir> <target-data-dir> [state-file]");
+  console.error("target-data-dir may alternatively be supplied by DSH_PI_AI_DATA_DIR");
+  process.exit(1);
+}
 const WIRE_GROUP_FIX = { "opencode-go": ["gpt-6-luna", "grok-4.5"] };
 
 // models.dev 真实数据（补条目用）
