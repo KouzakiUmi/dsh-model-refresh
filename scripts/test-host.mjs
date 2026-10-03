@@ -237,7 +237,34 @@ try {
   assert.ok(!(await readdir(cancelling.directory)).some((name) => name.endsWith('.models.json')));
   const diskState = await loadState(cancelling.statePath);
   assert.equal(diskState.runtime.running, false);
-  console.log('HOST TESTS PASSED: migration, atomic persistence, validation, origin/body limits, shared queue/timer coalescing, strict save errors, lease/dispose/restart, official outage fallback, disabled rollback');
+
+  // Regression: a bootstrap failure must degrade into a readable status route, never a 404.
+  // The settings page can only explain a failure it can fetch.
+  const brokenDirectory = path.join(root, `case-${++count}`);
+  const brokenData = path.join(brokenDirectory, 'data');
+  await mkdir(brokenData, { recursive: true });
+  const brokenState = path.join(brokenDirectory, 'state.json');
+  // An unsupported future version fails closed at loadState, which is the shape of a
+  // bootstrap failure that used to leave every route unregistered.
+  await writeFile(brokenState, JSON.stringify({ version: 99, settings: {}, routes: [], runtime: {} }));
+  const brokenCtx = context();
+  const brokenHost = createHost(brokenCtx, { statePath: brokenState, seedPath: path.join(brokenDirectory, 'missing-seed.json'), dataDir: brokenData, fetchFn: async () => jsonResponse({}), initialRefresh: false });
+  controllers.push(brokenHost);
+  await assert.rejects(brokenHost.ready, /Unsupported state version/);
+  assert.ok(brokenCtx.routes.has('/plugins/dsh-model-refresh/status'), 'status route must survive a failed bootstrap');
+  const degraded = await invoke(brokenCtx, 'status', null, {}, 'GET');
+  assert.equal(degraded.code, 200);
+  assert.equal(degraded.data.degraded, true);
+  assert.equal(degraded.data.initialized, false);
+  assert.match(degraded.data.lastError, /Unsupported state version/);
+  assert.match(degraded.data.degradedHint, /重启 DSH/);
+  // Mutating routes still refuse while uninitialized rather than silently no-op.
+  const refused = await invoke(brokenCtx, 'refresh', {});
+  assert.equal(refused.code, 503);
+  await brokenHost.dispose();
+  assert.equal(brokenCtx.routes.size, 0);
+
+  console.log('HOST TESTS PASSED: migration, atomic persistence, validation, origin/body limits, shared queue/timer coalescing, strict save errors, lease/dispose/restart, official outage fallback, disabled rollback, degraded-status-on-failed-bootstrap');
 } finally {
   await Promise.allSettled(controllers.map((host) => host.dispose()));
   // The only deleted directory is the exact mkdtemp result created by this test.

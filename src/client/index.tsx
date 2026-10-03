@@ -46,6 +46,8 @@ type Status = {
   pluginVersion?: string
   settingsRevision?: number
   initialized?: boolean
+  degraded?: boolean
+  degradedHint?: string | null
   warnings?: string[]
   running: boolean
   lastRun: string | null
@@ -382,10 +384,11 @@ export function ModelRefreshSettings(): JSX.Element {
     {!status && !loadError && <p role="status">正在读取状态…</p>}
     {status && <>
       <section style={box}>
-        <div style={{ ...row, justifyContent: 'space-between' }}><strong>{status.running ? '正在刷新…' : '刷新就绪'}</strong><span style={muted}>上次运行：{fmtTime(status.lastRun)}</span><button style={button} disabled={disabled} onClick={() => void refreshNow()}>立即刷新</button></div>
+        <div style={{ ...row, justifyContent: 'space-between' }}><strong>{status.degraded ? '插件启动失败' : status.running ? '正在刷新…' : '刷新就绪'}</strong><span style={muted}>上次运行：{fmtTime(status.lastRun)}</span><button style={button} disabled={disabled} onClick={() => void refreshNow()}>立即刷新</button></div>
         <div style={{ ...row, marginTop: 12 }}><span>{routes.length} 个路由</span><span>{routes.filter((r) => r.enabled).length} 已启用</span><span>{routes.filter(hasIssue).length} 有异常</span><span>发现 {sum('added')}</span><span>已应用 {sum('applied')}{routes.some((r) => r.applied === undefined) ? '（部分路由未报告）' : ''}</span><span>待确认 {sum('pending')}</span><span>已移除 {sum('removed')}</span></div>
+        {status.degraded && <p role="alert" style={failure}>启动失败：{status.lastError ?? '未知原因'}。{status.degradedHint}</p>}
         {status.warnings?.map((item, i) => <p key={i} style={warning}>{item}</p>)}
-        {status.lastError && <p role="alert" style={failure}>最近运行错误：{status.lastError}</p>}
+        {!status.degraded && status.lastError && <p role="alert" style={failure}>最近运行错误：{status.lastError}</p>}
         {status.restartRequired && <p style={warning}>后端报告目录已变更，需要重启后生效。本页面不会自动重启。</p>}
         {status.catalogWritable === false && <div style={{ ...row, marginTop: 10 }}><span style={warning}>目录写入不可用；候选发现不等于写入成功。</span>{status.catalogGrantCommand && <button style={button} onClick={() => setGrantOpen(true)}>查看授权说明</button>}</div>}
       </section>
