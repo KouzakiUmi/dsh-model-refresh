@@ -1,195 +1,115 @@
-# dsh-model-refresh
+# dsh-model-refresh · v0.6
 
-把「模型目录更新」从等 pi-ai 发版变成插件式定时拉取：从 models.dev（pi-ai
-目录数据本身的上游）拉最新数据，与**已安装** pi-ai catalog 做「并集 + 元数据
-刷新」合并，产物落到 `~/.dsh/model-refresh/`，接进 `llm-pi-ai` 路由配置；
-v0.2 起**自动发现安装目录的全部 provider route**（本机 41 条），把新增模型
-和已知模型的元数据一并写进安装树 catalog（已获用户授权），并带设置页
-（provider 开关 / 拉取监控 / 代理）。
+将 pi-ai 静态模型目录的补缺做成可独立升级的插件。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
 
-## 背景（本机取证结论，官方 0.2.0-rc.2 / pi-ai 0.87.1）
+## 重新设计的原则
 
-- pi-ai 的目录是安装包内静态快照（`dist/providers/data/*.json`，静态 import），
-  改安装数据必须重启；
-- `llm-pi-ai` route 配置面：`models` 非空整体替换、条目只认
-  id/name/contextWindow/maxTokens/input/reasoning 等 route 字段（vendor 级
-  `compat` 进配置会报错，2026-10-03 实测）；**安装目录不认识的新 id 无法在
-  route 配置里给 `api`**（resolveRouteModels 只看 route 级 api / 安装目录 /
-  全目录共享协议，而 opencode-go 是多协议路由）→ 新模型必须进安装树
-  catalog 才能干净落地，这正是 v0.2 catalog patch 的依据。
+1. **数据源互相独立**：models.dev / LiteLLM 失败或没有 provider 数据，不会阻断官方清单发现、已有目录保留或停用回滚。单个 provider 失败不终止其它 provider。
+2. **证据不混用**：第三方数据库提供元数据；官方清单提供正向存在性证据；`GET /models` 成功并不证明推理协议正确、套餐支持全部条目，或推理已测通。401/403 不是端点正确的证明。
+3. **不再猜容量和协议**：新模型必须有有效上下文/输出容量以及明确协议、推理 baseUrl。官方容量 > 精确匹配的第三方容量 > 用户显式默认值。删除旧版“邻居众数 / 200000、64000”兜底。缺依据进入待确认，不能进入已应用列表。
+4. **不污染原生目录**：已有模型的原生容量、image/reasoning 等不被第三方旧数据覆盖；第三方仅填空，明确官方字段可更新路由产物。既有原生 catalog 元数据不再批量改写。
+5. **删除必须有负向证据**：仅用户明确确认当前套餐权威全量清单（`complete: true`），且响应没有分页/不完整迹象，连续确认缺失并过宽限期后，才产生移除计划。默认 24 小时 + 2 次；失败、缺 key、部分页会中断连续观察。`keep`、命名空间对应及同步冲突保护目录和路由产物两侧。
+6. **真实写入才发布**：候选发现、待确认、实际写入、实际移除分别计数。目录写入关闭或失败时，未知 ID 不进入可消费的路由产物，避免 `needs an api`。
+7. **回滚必须证明所有权**：新台账记录 protocol + ID + before/after + 包/manifest 修订指纹。只有当前内容和目录修订都匹配才能回滚。上游升级收录同 ID、甚至内容相同，修订变化也会释放所有权、保留模型。
 
-## 数据源（v0.5：两级上游 + 官方核对补缺 + 无源标注）
+## 架构
 
-1. **models.dev**（主源，pi-ai 自己的上游）：226 个 provider，覆盖本机
-   41 个 route 中的 29 个；
-2. **LiteLLM**（第二上游，[BerriAI/litellm](https://github.com/BerriAI/litellm)
-   的 `model_prices_and_context_window.json`，MIT，GitHub raw 直链）：
-   models.dev 没数据的 route 按内置前缀映射补缺（`fireworks`→`fireworks_ai`、
-   `together`→`together_ai`、`azure-openai-responses`→`azure`、
-   `vercel-ai-gateway`→`vercel_ai_gateway`、`zai-coding-cn`→`zai`、
-   `qwen-token-plan*`→`dashscope`、`kimi-coding`→`moonshot`），id 剥前缀后
-   与安装目录对齐（test-litellm 真实网络断言 22 个 id 命中）。
-   **litellm 来源的上游 added 不进 catalog patch**（无 wire-protocol 信息，
-   归组无依据）；其数据集覆盖不全 → stale 不可信，不参与 removeStale；
-3. **官方接口核对 + 补缺**（`lib/official.mjs`，**本插件的核心通路**）：
-   对配置了凭据的 route（内置表覆盖 8 个 LiteLLM 补缺 route，env 名
-   `settings.officialRoutes` 可覆盖）先 `GET {catalog baseUrl}/models`
-   （OpenAI 兼容，Bearer key 走 env → credentials 服务）拿权威清单——
-   - **核对**：官方还在的 id 即使上游没有也不算 stale（近似数据源如
-     litellm `moonshot/*` ≠ `kimi-coding` 套餐的误报被翻案）；上游新增
-     但官方没有 → 剔除（`diff.unverified`）；
-   - **补缺**：官方有、安装目录与全部上游都没有的 id → 构造条目（容量：
-     route 显式值 > 同 route 众数 > 200000/64000 兜底，text-only 保守
-     入模）注入链路，**进模型列表 + 进安装树 catalog** —— 官方接口上了
-     新模型而 pi-ai 内置库全无数据时，下一轮刷新即可用；
-   - 没 key / 拉取失败 / 无 baseUrl → fail-soft 跳过核对，
-     `perRoute.official` 记状态（`verified`/`no-key`/`failed`/`unconfigured`），
-     设置页徽标标注"官方已核对 / 官方未核对"。
-     **端点路径核查**（2026-10-03 实测，`scripts/probe-official-endpoints.mjs`）：
-     catalog baseUrl 语义因 vendor 而异——OpenAI 风格已带 `/v1`（together、
-     qwen-token-plan×3、zai 直拼 `/models` 命中 401）；**Anthropic 风格不带**
-     （kimi-coding `/coding`、fireworks `/inference`、vercel 裸域名，直拼 404）
-     → `fetchOfficialIds` 走候选序列 `{base}/models` →（无版本段时）
-     `{base}/v1/models`：404 换下一个，401/403 视为"路径存在、key 被拒"
-     优先报出。**8/8 route 端点全部命中**；
-4. **无上游数据源**（`ant-ling`、`radius`、`openai-codex`）：上游与官方
-   都没有 → 标注 `source: 'none'`，只展示安装目录快照，等 pi-ai 整包升级。
-
-设置页每个 provider 卡片带数据源徽标 + 官方核对徽标，展开详情显示
-"官方接口补缺 / 官方未确认已剔除"清单；全局设置有 LiteLLM 开关
-（`litellmEnabled`）与官方核对开关（`officialVerify`，默认开）。
-
-## v0.2 架构
-
-```
-lib/index.js        Host：定时刷新 + 代理 fetch + catalog patch + Web 路由
-lib/merge.mjs       纯函数合并（已知 id 白名单投影 + 新 id 安全字段）
-lib/state.mjs       插件自管状态 ~/.dsh/model-refresh/state.json（原子写）
-lib/catalog-patch.mjs 安装树 data JSON 增量合入/回滚（纯函数）
-lib/litellm.mjs    LiteLLM 第二上游适配器（纯函数，前缀剥离 + 形状转换）
-lib/official.mjs   官方接口核对 + 补缺（纯函数，/models 清单 + 容量兜底）
-src/client/index.tsx 设置页（React；esbuild 构建 → lib/client.js）
-scripts/build-client.mjs 构建（react 保持 external，ModuleLoader wrapper）
+```text
+models.dev ─┐
+LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
+官方清单 ───┤          │
+安装目录 ───┘          ├─> catalog-store（锁 + 写前日志 + 所有权校验）
+                      └─> 实际目录核对后输出路由产物 + 监控
 ```
 
-- **配置与状态**全在 `state.json`（v0.1 的 `config.json` 只作首次种子导入）；
-  **routes 自动发现**（`settings.autoDiscover`，默认开）：启动时扫描安装目录
-  `data/*.json`，未登记的 provider 追加为 enabled 条目（models.dev 没有的
-  自动 skip，只产出安装目录快照）；
-- **Web 路由**（设置页数据通道，同源校验）：
-  `GET /plugins/dsh-model-refresh/status`、`POST .../refresh`、
-  `POST .../config`、`POST .../route`；
-- **设置页**：Settings 里的「模型刷新」区 —— 每 provider 开关（禁用即回滚
-  catalog patch 并把产物回退为安装目录快照）、拉取监控（lastRun/diff/错误）、
-  endpoint / 间隔 / 代理 / patchCatalog / removeStale 开关、立即刷新按钮；
-  provider 卡片默认折叠（点头部 ⬇️ 展开详情），授权命令在独立弹窗带复制按钮
-  （v0.3）。
-- **代理**：`proxyUrl` 经 undici `ProxyAgent`（仅本插件的 fetch，不碰全局）；
-  仅 http(s)，拒绝内嵌凭据；
-- **catalog patch**（默认开，可在设置页关）：对每个 enabled route 两件事——
-  ① 已知模型元数据刷新（name/contextWindow/maxTokens/input/reasoning/cost，
-  只刷已有字段、不碰 api/baseUrl/compat 等 vendor 字段，无变化不写盘）；
-  ② diff.added 新模型写进对应 wire-protocol 分组（models.dev 无协议字段，
-  按 `provider.npm` 线索映射：`@ai-sdk/anthropic`→anthropic-messages、
-  `@ai-sdk/openai`→openai-responses、其余→openai-completions），条目只写
-  展示/容量/成本字段（不猜 compat）。**命名空间错位防御**：added `org/model`
-  与 stale `model`（或 `prefix/org/model`）互为对方时视为 id 体系变更而非新
-  模型，跳过不写（cloudflare-ai-gateway 实测两种方向）。台账记录插件写入的
-  id，route 禁用或 patchCatalog 关闭时自动回滚。**Program Files 默认不可写**：
-  一次性管理员授权（设置页会显示命令）：
-  `icacls "C:\Program Files\DSH NEXT\resources\app\node_modules\@earendil-works\pi-ai\dist\providers\data" /grant "*S-1-5-32-545:(OI)(CI)M"`
-  pi-ai 整包升级会覆盖该文件（=官方数据回归），插件下一轮刷新重新合入。
+- `lib/official.mjs`：安全鉴权、明确清单 URL 或兼容路径、响应形状验证、分页信号、容量和类型提取。仅 404 尝试下一个候选，禁止携带凭据自动重定向；401/403 直接报鉴权拒绝。
+- `lib/planner.mjs`：统一候选、pending、removals；明确非聊天类型（embedding/audio/image 等）不注入聊天路由；对象 key 与 model.id 必须相等。
+- `lib/catalog-store.mjs`：唯一临时文件、写前 journal、内容/修订校验、协调写锁、恢复未完成提交。不会用损坏桶替换原组。
+- `lib/index.js`：启动/定时/手动/配置共用队列；重复刷新去重；每轮配置快照；dispose 取消网络并清理路由；源/路由错误分别保留。
+- `lib/state.mjs`：v3 状态和 v1/v2 迁移，损坏 JSON / 未来版本拒绝覆盖。
+- `lib/host-{io,http,lease}.mjs`：原子持久化、严格同源 loopback Web API、有界 JSON 请求、Host 状态生命周期锁。
+- `src/client/index.tsx`：默认折叠，搜索筛选，应用/待确认/冲突监控；provider 官方端点、凭据名称、协议、完整性和容量配置；代理及全局开关；授权说明独立弹窗。
+- `lib/merge.mjs` / `lib/catalog-patch.mjs`：旧纯函数兼容和字段/YAML/条目构造工具；Host 不再调用其旧 ID-only 回滚及第三方 stale 删除链路。
 
-## 用法
+## 配置与安全默认
 
-### 1. 配置
+首次使用默认不写安装目录；自动发现的 provider 默认停用。显式 seed route 或已有配置保留原启用/目录写入选择，不替用户扩大范围。
 
-设置页（推荐）或直接编辑 `~/.dsh/model-refresh/state.json`。初始种子可放
-插件目录 `config.json`（见 config.example.json；首次启动导入后不再读）。
+默认状态路径为 `os.homedir()/.dsh/model-refresh/state.json`，不再从插件安装路径猜用户目录。目录优先从真实 DSH 消费入口解析 pi-ai，取消本机硬编码 fallback；找不到时配置 `DSH_PI_AI_DATA_DIR`，无效显式覆盖拒绝退回其它安装。
 
 环境变量：
 
-- `DSH_MODEL_REFRESH_CONFIG` — 种子 config.json 路径（默认插件目录旁）；
-- `DSH_MODEL_REFRESH_STATE` — state.json 路径（默认 `~/.dsh/model-refresh/`；测试隔离用）；
-- `DSH_PI_AI_DATA_DIR` — 已安装 pi-ai 的 `dist/providers/data` 目录。
+| 变量 | 用途 |
+| --- | --- |
+| `DSH_MODEL_REFRESH_STATE` | 状态路径；默认产物输出在状态目录 |
+| `DSH_MODEL_REFRESH_CONFIG` | 首次种子配置路径 |
+| `DSH_PI_AI_DATA_DIR` | 正在被 DSH 使用的 pi-ai `dist/providers/data` |
 
-### 2. 产物
+首次迁移会先把原始状态备份为 `state.json.pre-v3-<时间戳>.bak`；备份成功后才允许写 v3。若需要退回旧版，先停止 Host、回滚代码，再人工恢复对应旧状态备份，不能让 v0.5 直接读取 v3 状态（旧版会丢弃不认识的版本）。
 
-- `~/.dsh/model-refresh/<route>.models.json` — 完整结果（接线引用的就是它）；
-- `~/.dsh/model-refresh/<route>.models.yml` — 可读 YAML 片段；
-- `~/.dsh/model-refresh/<route>.diff.json` — added / updated / stale / excluded；
-- `~/.dsh/model-refresh/state.json` — 配置 + 监控状态。
+已有 v2 状态迁移到 v3 时保留 settings、provider 开关、排除/保留名单及 LiteLLM 映射。旧新增台账只有 ID，不能证明所有权：迁入 `runtime.legacyProtected`，**不自动删除这些历史新增条目**。旧删除备份只恢复缺失条目，不覆盖或制造跨协议重复 ID。旧版已经覆盖的原生元数据无法凭旧台账恢复，本版不假称能还原。
 
-### 3. 接线（一次性，人工执行）
+### 每 provider 官方配置
 
-在 profile 的 `cordis.patch.yml` 里，把对应 route 的 `models:` 换成引用产物：
+设置页高级配置或 `settings.officialRoutes`：
+
+```json
+{
+  "officialRoutes": {
+    "kimi-coding": {
+      "endpoint": "https://api.kimi.com/coding/v1/models",
+      "apiKeyEnv": "KIMI_CODING_API_KEY",
+      "auth": "bearer",
+      "protocol": "anthropic-messages",
+      "complete": false
+    }
+  }
+}
+```
+
+- `endpoint` 是**完整清单 URL**，`baseUrl` 是**推理根 URL**，不要混用；未设置时使用唯一目录端点。
+- 凭据从环境变量或 DSH credentials 服务解析，状态中只保存名称；不保存真实密钥。
+- `auth`：`bearer`（默认）、`anthropic`（x-api-key）、`none`（明确公开接口，不发送凭据）。带凭据的非 loopback 清单必须 HTTPS。
+- `protocol` 留空时，仅能继承唯一现有协议；多协议路由不凭名字猜。OpenAI SDK 不能证明使用 Responses。
+- `contextWindow` / `maxTokens` 是用户显式默认值，不是已测模型容量；可用于官方仅返回 ID 的补缺，界面提示此区别。
+- `assumeChat` 默认 false：容量和 ID 本身不证明聊天用途；没有明确类型元数据的官方新 ID 进入待确认。只有用户明确确认套餐未知 ID 的聊天用途时才允许 text-only 补缺；明确非聊天类型始终拒绝。
+- `complete` 默认 false，完整性未确认也可以使用正向发现，但不能删模型。HTTP Link、has_more、next_cursor 等分页迹象强制降级为部分清单；当前不自动追页。
+- `null` 禁用该 route 的官方请求；默认内置表包含 kimi-coding、zai-coding-cn、fireworks、together、Qwen token plan 三路、vercel-ai-gateway。其它 provider 可显式配置，不伪造全覆盖。Azure 的通用模型 ID 不等于 deployment ID，无法从通用数据库证明可用部署。
+- LiteLLM 中 moonshot/zai/dashscope 与 Coding 套餐只是候选元数据映射，不是套餐支持声明；缺官方确认时不发布近似源新模型。
+
+Web API：`GET /plugins/dsh-model-refresh/status`；`POST .../refresh`、`.../config`、`.../route`。POST 必须精确同源 Origin、loopback Host、application/json；64 KiB / 10 秒有界 body。配置使用 `expectedRevision` 乐观锁，避免不同页面覆盖草稿；轮询不覆盖未保存的表单。
+
+## 产物与生效
+
+输出 `<route>.models.json`、`<route>.models.yml`、`<route>.diff.json`；保留原文件名和 models 数组结构，原先引用不需改。
 
 ```yaml
 opencode-go:
   models: !!js JSON.parse(process.getBuiltinModule("node:fs").readFileSync(process.env.USERPROFILE.replaceAll(String.fromCharCode(92), "/") + "/.dsh/model-refresh/opencode-go.models.json", "utf8")).models
 ```
 
-依据：loader 对 `!!js` 的求值是 `new Function("ctx","with(ctx){return eval(expr)}")`，
-ESM 宿主全局无 `require`，用 `process.getBuiltinModule("node:fs")`
-（scripts/test-expression.mjs / verify-expression.mjs 验证）。
+该表达式只是原部署的兼容示例，非跨平台 HOME 解析；请按自己的配置位置指定路径。模型目录是 pi-ai 静态 import，产物也不是自动热注册新模型；写盘后设置页提示重启。首次加载插件 → 刷新写目录 → 再加载消费进程，具体次数取决于当前是否已经加载新插件。不会自动重启应用。
 
-**生效时机（重要）**：`!!js` 只在 `internal/config` 事件时求值；catalog patch
-也因 pi-ai 静态 import 需要重启。因此「新模型真正可用」的路径是：
-icacls 授权 → 重启 DSH（插件 v0.2 运行 + patch catalog）→ 再重启一次
-（新模型进 catalog 生效）。设置页的 restartRequired 会提示。
+Program Files 的权限不足是**可诊断错误**，不是所有写入错误都要提权。设置页只提供独立授权说明/复制命令，不执行命令；请按实际用户权限和授权范围检查。插件不更改 DSH 核心、ASAR、profile 或全局代理。
 
-## 合并语义
+## 故障恢复边界
 
-- 已知 id：catalog 为底，models.dev 覆盖 name/contextWindow/maxTokens/input/reasoning；
-  产物只投影 route 允许字段（vendor 级字段一律不进）；
-- 新 id：models.dev 安全字段 + 容量必须齐全（缺失跳过），catalog patch 用
-  完整条目写安装树；
-- 上游移除的 id（stale）：默认保留（防抖动），diff 标 `stale`，决定后加进
-  `exclude`。设置页**「移除过时模型」开关**（`settings.removeStale`，v0.3）
-  打开后：产物剔除 stale（`keep` 白名单豁免），安装目录里的 stale 条目在
-  **完整备份到 `state.runtime.catalogRemoved`** 后删除——关开关 / 禁用该
-  provider 即从备份逐字段恢复（绝不覆盖现有条目）；与 added 构成命名空间
-  对应的 stale 不删（上游换 id 体系，不是真过时）。
+- 目录写入前 journal 落在状态目录的 `transactions/`；catalog 已提交但 state 写失败时，下一次恢复根据 before/after hash 补台账；两者都不匹配则保留 journal 报冲突，不覆盖外部修改。
+- 状态 `.lock` 整个 Host 生命周期持有，正常 dispose 释放。**进程被强杀或崩溃可能遗留锁**：插件 fail-closed 并报锁路径/PID；先核实对应 DSH 进程已结束，再人工移走旧锁，重新加载后恢复 journal。不能在活跃 Host 运行时删除锁。
+- 同一安装目录建议只由一个配置状态管理。不同状态目录的多个 Host 不提供全局协调保证；更新/安装 pi-ai 时应停止插件消费者。非合作外部写者的检查与 rename 之间仍存在竞态，文件 API 不提供跨程序原子 CAS；不能声称绝对事务隔离。
+- 包或 manifest 修订不变、内容也完全相同的外部同版本重装无法区别所有权；检测到修订变化会保守释放，不删升级模型。
+- 旧台账保护/同步冲突需要人工核验，不能静默“清理”。损坏状态保持原文件不覆盖。
 
-## 构建/测试
+## 验证
 
-```
-pnpm run build:client     # esbuild + wrapper（react external）
-node scripts/test-merge.mjs        # 合并纯函数（固定基线 .orig-opencode-go.json）
-node scripts/test-catalog-patch.mjs # patch/回滚/元数据/命名空间防御纯函数
-node scripts/smoke.mjs             # stub ctx 冒烟（真实网络拉取，不写安装树）
-node scripts/test-expression.mjs   # !!js 求值语义复刻
-node scripts/verify-expression.mjs # 对真实产物跑接线表达式
-node scripts/test-integration.mjs  # 全链路离线集成（fixture 服务器）
-node scripts/test-litellm.mjs      # LiteLLM 适配器（含真实网络 id 对齐断言）
-node scripts/test-official.mjs     # 官方核对/补缺（注入 fetch，含 merge 语义）
-node scripts/probe-official-endpoints.mjs # 实测全部官方端点路径（无 key 探测）
-node scripts/restore-all.mjs <data-dir> # 从 npm 原包全量恢复安装树（事故恢复用）
+```text
+npm test
+npm run build:client
+node scripts/smoke.mjs  # 安全别名：运行隔离 Host 场景，不连接真实网络
 ```
 
-**测试纪律（2026-10-03 事故教训）**：任何测试/smoke 进程都不得写安装树——
-smoke 与 integration 现固定 `patchCatalog=false` + 隔离 state/临时 data 目录；
-只有 Host 进程（安装树授权 + 状态台账）才写 catalog。测试断言的 installed
-基线一律用 `.orig-opencode-go.json`（npm 原包提取），不读实时安装树（插件
-patch 后"新模型"不再是新模型，断言会漂移）。
+默认测试只用 fixture、fake credentials 和 mkdtemp 隔离目录，不读取真实密钥、不写正式产物或安装树。覆盖主源失败时官方补缺、容量/协议待确认、分页/空清单、错误鉴权、旧数据保护、类型过滤、keep/namespace、宽限删除、同内容上游收录、写前日志恢复、状态迁移、并发去重、Origin/body 安全、dispose、锁释放。
 
-## 事故记录（2026-10-03）
+测试 Host controller 的真实文件/HTTP/生命周期路径，但并不等价于真实 Cordis Loader composition 或已加载设置页验收；这两项及真实凭据的官方响应应在明确部署/重载后验证，不把 stub 测试称为已测通生产环境。
 
-- **组重置 bug**：`applyCatalogPatch` 曾用 `!Array.isArray(next[group])` 判断
-  wire-protocol 组是否存在——组是对象映射而非数组，条件恒真，**每次 patch
-  把整组清空重建**，安装树 opencode-go 一度只剩 26 条。修复为对象形态判断
-  （test-catalog-patch 防回归）；
-- **测试进程写安装树**：smoke/integration 与 Host 并发写同一文件（各写各的
-  中间态，互相覆盖）→ 已按上述测试纪律彻底隔离；
-- **污染恢复**：`restore-all.mjs` 从 npm pi-ai 0.87.1 原包恢复全部 41 个
-  data 文件 + opencode-go 重新补入 2 个新模型 + state 台账对齐。
-
-## 未验证 / 后续
-
-- [ ] Host 进程内实际运行 v0.2（webServer 路由 key、设置页渲染）—— 重启后验证；
-- [x] `!!js` 表达式环境与产物求值（复刻 + 真实产物）；
-- [x] 刷新产物后的生效时机：不热生效，需重启；
-- [x] Config：v0.2 选择插件自管 state.json（照 grok-kit options 模式），
-      未走 schemastery `settings.register`（官方 Plugins 页自动表单）——
-      监控 UI 需要自定义组件，schema 表单表达不了，列为一项权衡；
-- [ ] routes 的增删目前只能编辑 state.json（设置页只提供开关），后续可加 UI。
+历史恢复脚本 `scripts/restore-all.mjs` 属于事故工具，不是测试，不运行它来验证插件。

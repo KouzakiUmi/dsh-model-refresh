@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
+import { synchronizeCatalog, recoverCatalogTransactions } from '../lib/catalog-store.mjs';
+const dir = await mkdtemp(path.join(tmpdir(), 'refresh-store-'));
+console.log('isolated temp directory:', dir);
+try {
+  const dataDir = path.join(dir, 'catalog'); await mkdir(dataDir);
+  const file = path.join(dataDir, 'test.json');
+  const base = { id: 'base', api: 'anthropic-messages', baseUrl: 'https://a', contextWindow: 1000, maxTokens: 100 };
+  const original = { 'anthropic-messages': { base } };
+  await writeFile(file, JSON.stringify(original));
+  const state = { routes: [{ route: 'test' }], runtime: { catalogOwned: {}, catalogRemoved: {}, catalogPatched: {} } };
+  const read = async () => JSON.parse(await readFile(file, 'utf8'));
+  let persistFail = false;
+  const persist = async () => { if (persistFail) throw new Error('injected state failure'); };
+  const args = { dataDir, route: 'test', state, stateDir: dir, persist, enabled: true, patchCatalog: true, removeStale: true };
+  const entry = { ...base, id: 'new' };
+  let result = await synchronizeCatalog({ ...args, plan: { additions: [{ id: 'new', group: base.api, entry }] } });
+  assert.deepEqual(result.applied, ['new']);
+  assert.equal(state.runtime.catalogOwned.test[0].before, null);
+  result = await synchronizeCatalog({ ...args, patchCatalog: false });
+  assert.deepEqual(await read(), original, 'disable rolls back owned addition only');
+  await synchronizeCatalog({ ...args, plan: { additions: [{ id: 'new', group: base.api, entry }] } });
+  const upgraded = await read(); upgraded[base.api].new.contextWindow = 2000;
+  await writeFile(file, JSON.stringify(upgraded));
+  result = await synchronizeCatalog({ ...args, patchCatalog: false });
+  assert.equal(result.conflicts.length, 1);
+  assert.equal((await read())[base.api].new.contextWindow, 2000, 'upstream adopted id must never be deleted');
+  result = await synchronizeCatalog({ ...args, plan: { removals: ['base'] } });
+  assert.deepEqual(result.removed, ['base']);
+  assert.equal((await read())[base.api].base, undefined);
+  await synchronizeCatalog({ ...args, plan: { removals: [] } });
+  assert.deepEqual((await read())[base.api].base, base, 'model reappearance or incomplete evidence restores deletion');
+  persistFail = true;
+  await assert.rejects(() => synchronizeCatalog({ ...args, plan: { additions: [{ id: 'crash', group: base.api, entry: { ...base, id: 'crash' } }] } }), /state failure/);
+  assert.ok((await read())[base.api].crash);
+  const recovering = { routes: state.routes, runtime: { catalogOwned: {}, catalogRemoved: {} } };
+  persistFail = false;
+  await recoverCatalogTransactions({ dataDir, state: recovering, stateDir: dir, persist });
+  assert.ok(recovering.runtime.catalogOwned.test.some(r => r.id === 'crash'), 'journal repairs ownership after state write failure');
+  state.runtime.catalogPatched.test = ['new']; state.runtime.legacyProtected = { test: ['new'] };
+  await synchronizeCatalog({ ...args, enabled: false });
+  assert.ok((await read())[base.api].new, 'legacy id-only ledger never grants deletion rights');
+  // Cross-protocol duplicate protection during recovery of old removal backup.
+  state.runtime.catalogRemoved.test = { new: { group: 'openai-completions', entry: { ...entry, api: 'openai-completions' } } };
+  await synchronizeCatalog({ ...args, enabled: false });
+  assert.equal((await read())['openai-completions'], undefined);
+  await synchronizeCatalog({ ...args, plan: { additions: [{ id: 'adopted', group: base.api, entry: { ...base, id: 'adopted' } }] } });
+  await writeFile(path.join(dataDir, '.manifest.json'), JSON.stringify({ generatedAt: 'new-upstream-revision' }));
+  result = await synchronizeCatalog({ ...args, patchCatalog: false });
+  assert.ok((await read())[base.api].adopted, 'same-content upstream adoption is protected by catalog revision');
+  assert.ok(result.conflicts.some(v => v.includes('revision')));
+  console.log('STORE TESTS PASSED');
+} finally {
+  // dir is verified mkdtemp return; never targets the real catalog or state.
+  assert.ok(path.resolve(dir).startsWith(path.resolve(tmpdir()) + path.sep));
+  await rm(dir, { recursive: true, force: true });
+}
