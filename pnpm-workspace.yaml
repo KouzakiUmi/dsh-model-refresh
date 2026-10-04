@@ -1,6 +1,7 @@
-# pnpm 10/11 读取此文件决定允许哪些依赖执行构建脚本。
-# pnpm 11 起 package.json 的 "pnpm" 字段不再被读取，故白名单必须放这里。
-# build:client 依赖 esbuild 的 postinstall 落盘原生二进制。
-onlyBuiltDependencies:
-  - esbuild
-  - '@esbuild/win32-x64'
+# pnpm 11 起移除了 onlyBuiltDependencies / onlyBuiltDependenciesFile /
+# neverBuiltDependencies / ignoredBuiltDependencies，改用 allowBuilds（pnpm.io/settings/build）。
+# CI 上无论 corepack 拉到的 pnpm 12.9.1 还是 action-setup 固定的 11 都属于"已移除旧键"的版本，
+# 所以旧键放哪里都不生效（表现为 ERR_PNPM_IGNORED_BUILDS: esbuild）。
+# build:client 依赖 esbuild 的 postinstall 落盘原生二进制，故显式允许。
+allowBuilds:
+  esbuild: true
