@@ -47,7 +47,7 @@ jobs:
           version: 11
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --no-frozen-lockfile --config.onlyBuiltDependencies=esbuild
 
       - name: Build
         run: |
