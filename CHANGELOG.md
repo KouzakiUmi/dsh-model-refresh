@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-04
+
+### Added
+
+- Add manual model creation and editing with explicit protocol, endpoint, capacity, input modalities, reasoning levels, and compatibility settings.
+- Preview and apply manual declarations through DSH configEditor, preserving existing models and credentials; support ownership-aware rollback and durable commit recovery.
+- Add offline regressions for manual workflows, client interactions, external edits, interrupted commits, source provenance, and simultaneous stale-lease reclamation.
+
+### Fixed
+
+- Merge exact-ID LiteLLM metadata into missing models.dev fields while retaining source provenance.
+- Accept text chat models that do not support tool calls.
+- Protect migrated legacy model IDs from stale deletion; share ownership-aware leases between Host and catalog transactions and serialize stale reclamation.
+- Keep live preflight output in an isolated temporary directory; derive reported plugin version from package metadata.
+- Reject stale settings and provider previews rather than overwriting concurrent edits.
+
 ## [0.6.2] - 2026-10-03
 
 ### Fixed
@@ -30,7 +46,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Reworked discovery around independent evidence sources, explicit protocol/capacity requirements, transactional catalog writes, ownership-aware rollback, and conservative stale removal.
 
-[Unreleased]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.6.10...v0.7.0
 [0.6.2]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/ac1ba92...v0.6.2
 [0.6.1]: https://github.com/KouzakiUmi/dsh-model-refresh/commit/ac1ba92
 [0.6.0]: https://github.com/KouzakiUmi/dsh-model-refresh/commit/ce77159

@@ -1,8 +1,8 @@
-# dsh-model-refresh · v0.6.2
+# dsh-model-refresh · v0.7.0
 
 将 pi-ai 静态模型目录的补缺做成可独立升级的 DSH bundle。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
 
-> 当前兼容性基线：DeepSeek Harness core `0.2.0-rc.2`。其它核心版本可能可用，但必须重新核对 bundle、Cordis 生命周期、client slot 与 pi-ai catalog 布局，不能仅凭安装成功推断兼容。
+> 本次手动模型功能对照本机 DeepSeek Harness core `0.2.1-alpha.1` 的 configEditor 与 pi-ai 接口开发。应用配置需要目标核心提供这些接口；其它版本需要重新核对兼容性。源码回归测试不代表远端模型推理已验证。
 
 ## 功能概览
 
@@ -11,6 +11,7 @@
 - catalog 写入默认关闭；启用后使用协调锁、写前 journal、修订指纹和内容所有权校验。
 - 删除要求权威完整清单、连续缺失确认和宽限期，失败或分页清单不会触发删除。
 - 设置页显示发现、已应用、待确认、冲突、重启需求和写入权限状态。
+- 设置页可手动增加、编辑模型，配置协议、端点、推理档位与协议兼容参数，通过官方配置编辑服务预览、应用和撤销。
 - Host 生命周期持有状态租约，死进程锁可保守接管，正常关闭等待队列收敛后再释放。
 
 ## 安装与接入
@@ -50,6 +51,24 @@ Host 或 bundle 源码变更后通常需要重载对应 DSH 消费进程。catal
 
 ## 重新设计的原则
 
+### 手动模型与高级能力
+
+在插件设置页点击 **手动增加模型**，填写 provider 名称、模型 ID、显示名、推理协议、根 URL、上下文和输出容量。除图像输入外，还可显式配置推理档位、temperature 支持、developer 角色、工具严格模式、流式 usage、输出 token 参数和协议兼容 JSON。
+
+1. 点击 **保存模型声明**。声明保存在插件状态的 `settings.manualModels`，自动发现不会覆盖它。
+2. 选择 DSH 配置入口和应用到的 provider；凭据栏只填写环境变量/credentials 的名称，留空保留已有设置。
+3. 点击 **预览配置变更**，核对模型列表，然后点击 **应用到 DSH**。插件通过 `configEditor.edit` 提交，Loader 负责验证和应用，无需修改安装目录中的 catalog。
+
+同一 provider 必须使用相同协议与端点。覆盖已有 provider 时保留原有模型、凭据和其它配置，并将 `modelOverrides` 合并到模型列表；动态 models 表达式和不唯一的端点/协议会被拒绝，请使用独立 provider 名称。未指定兼容字段继承原配置；关闭推理请显式选择“关闭推理”，开启则填写端点实际接受的各档位值。
+
+当前可选协议为 `openai-completions`、`openai-responses` 和 `anthropic-messages`；兼容控件只显示所选协议支持的字段，JSON 同样接受协议校验。可用 `node scripts/preflight-manual-core.mjs <已安装的 dsh-llm-pi-ai/lib/index.js 路径>` 对本机核心做只读接口核验。
+
+声明保存与配置应用分开。移除声明后，重新应用剩余声明才会更新已应用配置；没有剩余声明时使用 **撤销此 provider 的插件变更**。撤销恢复首次应用前的 provider 配置，保留声明便于再次应用。应用前预览过期，或目标配置被其它页面修改时，插件拒绝覆盖/撤销。提交中断通过独立事务日志恢复，不能确认的冲突保留日志并报错。
+
+应用表示配置通过 DSH 的编辑与加载流程，不表示端点、权限、工具调用或远端推理已经测通。
+
+### 自动发现与目录事务
+
 1. **数据源互相独立**：models.dev / LiteLLM 失败或没有 provider 数据，不会阻断官方清单发现、已有目录保留或停用回滚。单个 provider 失败不终止其它 provider。
 2. **证据不混用**：第三方数据库提供元数据；官方清单提供正向存在性证据；`GET /models` 成功并不证明推理协议正确、套餐支持全部条目，或推理已测通。401/403 不是端点正确的证明。
 3. **不再猜容量和协议**：新模型必须有有效上下文/输出容量以及明确协议、推理 baseUrl。官方容量 > 精确匹配的第三方容量 > 用户显式默认值。删除旧版“邻居众数 / 200000、64000”兜底。缺依据进入待确认，不能进入已应用列表。
@@ -73,8 +92,11 @@ LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
 - `lib/catalog-store.mjs`：唯一临时文件、写前 journal、内容/修订校验、协调写锁、恢复未完成提交。不会用损坏桶替换原组。
 - `lib/index.js`：启动/定时/手动/配置共用队列；重复刷新去重；每轮配置快照；dispose 先取消网络并等待队列收敛，在状态与 catalog 不再可能迟到写入后才释放生命周期租约；源/路由错误分别保留。
 - `lib/state.mjs`：v3 状态和 v1/v2 迁移，损坏 JSON / 未来版本拒绝覆盖。
+- `lib/manual-models.mjs`：手动模型与兼容字段验证；`lib/provider-config.mjs`：官方配置编辑、预览指纹、应用/撤销所有权及提交恢复。
+- `lib/metadata.mjs`：按精确 ID 和字段合并 models.dev / LiteLLM，并保留来源；近似来源不能冒充官方可用性证据。
 - `lib/host-{io,http,lease}.mjs`：原子持久化、严格同源 loopback Web API、有界 JSON 请求、Host 状态生命周期锁。
 - `src/client/index.tsx`：默认折叠，搜索筛选，应用/待确认/冲突监控；provider 官方端点、凭据名称、协议、完整性和容量配置；代理及全局开关；授权说明独立弹窗。
+- `src/client/ManualModels.tsx`：独立手动模型编辑、能力声明和配置预览/应用/撤销流程。
 - `lib/merge.mjs` / `lib/catalog-patch.mjs`：旧纯函数兼容和字段/YAML/条目构造工具；Host 不再调用其旧 ID-only 回滚及第三方 stale 删除链路。
 
 ## 配置与安全默认

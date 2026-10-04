@@ -1,6 +1,8 @@
 // 模型目录设置：候选发现、真实应用与待确认分开展示。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+import { ManualModels } from './ManualModels'
+import type { ManualModel } from './ManualModels'
 
 const BASE = '/plugins/dsh-model-refresh'
 type Protocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
@@ -69,8 +71,11 @@ type Status = {
     staleGraceHours?: number
     staleConfirmations?: number
     officialRoutes?: Record<string, OfficialConfig | null>
+    manualModels?: Record<string, ManualModel[]>
   }
   routes: RouteStatus[]
+  providerTargets?: { id: string }[]
+  providerApplications?: Record<string, unknown>
 }
 type GlobalDraft = {
   endpoint: string
@@ -109,7 +114,7 @@ async function getJson<T>(url: string): Promise<T> {
   if (!res.ok) throw new Error(`读取状态失败（HTTP ${res.status}）`)
   return res.json() as Promise<T>
 }
-async function postJson(url: string, body: unknown): Promise<void> {
+async function postJson<T = unknown>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
   if (!res.ok) {
     let detail = ''
@@ -119,6 +124,7 @@ async function postJson(url: string, body: unknown): Promise<void> {
     } catch { /* 非 JSON 错误仅显示状态码 */ }
     throw new Error(`操作失败（HTTP ${res.status}）${detail}`)
   }
+  return res.json() as Promise<T>
 }
 function fmtTime(value: string | null | undefined): string {
   if (!value) return '—'
@@ -303,6 +309,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const sequence = useRef(0)
   const draftInitialized = useRef(false)
   const draftRevision = useRef<number | undefined>(undefined)
+  const globalBase = useRef<GlobalDraft | null>(null)
   const [draft, setDraft] = useState<GlobalDraft | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [grantOpen, setGrantOpen] = useState(false)
@@ -314,7 +321,7 @@ export function ModelRefreshSettings(): JSX.Element {
     const next = await getJson<Status>(`${BASE}/status`)
     if (alive.current && request === sequence.current) {
       setStatus(next); setLoadError(null)
-      if (!draftInitialized.current && next.settings) { setDraft(toGlobalDraft(next.settings)); draftInitialized.current = true; draftRevision.current = next.settingsRevision }
+      if (!draftInitialized.current && next.settings) { const initial = toGlobalDraft(next.settings); setDraft(initial); globalBase.current = initial; draftInitialized.current = true; draftRevision.current = next.settingsRevision }
     }
     return next
   }, [])
@@ -343,9 +350,13 @@ export function ModelRefreshSettings(): JSX.Element {
         intervalMinutes: numberValue(draft.intervalMinutes, '刷新间隔', 1, true),
         staleGraceHours: numberValue(draft.staleGraceHours, '缺失宽限期', 1),
         staleConfirmations: numberValue(draft.staleConfirmations, '连续确认次数', 2, true) }
-      await postJson(`${BASE}/config`, body)
+      const latest = await getJson<Status>(`${BASE}/status`)
+      const latestDraft = toGlobalDraft(latest.settings)
+      const changed = Object.keys(draft).filter(k => draft[k as keyof GlobalDraft] !== globalBase.current?.[k as keyof GlobalDraft]) as (keyof GlobalDraft)[]
+      for (const key of changed) if (latestDraft[key] !== globalBase.current?.[key]) throw new Error(`${key} 已被其它页面修改，请核对后重载草稿`)
+      await postJson(`${BASE}/config`, { ...Object.fromEntries(changed.map(k => [k, body[k]])), expectedRevision: latest.settingsRevision })
       const next = await reload()
-      if (alive.current) { setDraft(toGlobalDraft(next.settings)); draftRevision.current = next.settingsRevision }
+      if (alive.current) { const saved = toGlobalDraft(next.settings); setDraft(saved); globalBase.current = saved; draftRevision.current = next.settingsRevision }
     }, '设置已保存。实际变更请以刷新后的应用记录为准。')
   }
   const saveOfficial = async (route: string, config: OfficialConfig | null): Promise<boolean> => run(async () => {
@@ -392,6 +403,9 @@ export function ModelRefreshSettings(): JSX.Element {
         {status.restartRequired && <p style={warning}>后端报告目录已变更，需要重启后生效。本页面不会自动重启。</p>}
         {status.catalogWritable === false && <div style={{ ...row, marginTop: 10 }}><span style={warning}>目录写入不可用；候选发现不等于写入成功。</span>{status.catalogGrantCommand && <button style={button} onClick={() => setGrantOpen(true)}>查看授权说明</button>}</div>}
       </section>
+      <ManualModels models={(status.settings as Status['settings'] & { manualModels?: Record<string, ManualModel[]> }).manualModels ?? {}}
+        targets={status.providerTargets ?? []} applications={status.providerApplications ?? {}} disabled={busy || status.initialized === false}
+        request={<T,>(endpoint: string, body: unknown) => postJson<T>(`${BASE}/${endpoint}`, body)} reload={reload} getLatest={() => getJson<Status>(`${BASE}/status`)} />
       <div style={{ ...row, marginBottom: 12 }}>
         <label style={{ flexGrow: 1 }}>搜索路由 / 模型 <input style={{ ...input, width: '100%' }} type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="名称、模型 ID、待确认原因" /></label>
         <label>筛选 <select style={input} value={filter} onChange={(e) => setFilter(e.target.value)}><option value="all">全部</option><option value="enabled">已启用</option><option value="issues">异常 / 警告</option><option value="pending">待确认</option></select></label>
@@ -412,7 +426,7 @@ export function ModelRefreshSettings(): JSX.Element {
           <label style={row}><input type="checkbox" checked={draft.removeStale} onChange={(e) => updateDraft('removeStale', e.target.checked)} />允许移除官方完整清单连续确认缺失的模型</label>
           <div style={row}><label>缺失宽限期（小时） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.staleGraceHours} onChange={(e) => updateDraft('staleGraceHours', e.target.value)} /></label><label>连续确认次数 <input style={{ ...input, width: 100 }} type="number" min={2} step={1} value={draft.staleConfirmations} onChange={(e) => updateDraft('staleConfirmations', e.target.value)} /></label></div>
           <span style={warning}>默认 24 小时宽限期 + 2 次完整官方清单确认。第三方缺失、缺凭据、请求失败或清单不完整均不能作为删除依据；固定保留与同步冲突应阻止删除。</span>
-          <div style={row}><button style={button} onClick={() => void saveGlobal()}>保存全局设置</button><button style={button} onClick={() => { setDraft(toGlobalDraft(status.settings)); draftRevision.current = status.settingsRevision }}>放弃全局草稿</button></div>
+          <div style={row}><button style={button} onClick={() => void saveGlobal()}>保存全局设置</button><button style={button} onClick={() => { const reset = toGlobalDraft(status.settings); setDraft(reset); globalBase.current = reset; draftRevision.current = status.settingsRevision }}>放弃全局草稿</button></div>
         </fieldset>
       </section>}
     </>}
