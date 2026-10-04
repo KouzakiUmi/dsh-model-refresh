@@ -1,0 +1,6 @@
+# pnpm 10/11 读取此文件决定允许哪些依赖执行构建脚本。
+# pnpm 11 起 package.json 的 "pnpm" 字段不再被读取，故白名单必须放这里。
+# build:client 依赖 esbuild 的 postinstall 落盘原生二进制。
+onlyBuiltDependencies:
+  - esbuild
+  - '@esbuild/win32-x64'
