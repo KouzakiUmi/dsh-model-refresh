@@ -11,3 +11,7 @@ node_modules/
 coverage/
 .DS_Store
 Thumbs.db
+
+# release pipeline artifacts
+dist/
+pack.json

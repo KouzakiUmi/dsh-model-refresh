@@ -1,8 +1,7 @@
 {
   "name": "dsh-model-refresh",
   "displayName": "模型目录刷新（models.dev → pi-ai 路由）",
-  "version": "0.6.2",
-  "private": true,
+  "version": "0.6.3",
   "description": "独立模型数据源与官方清单发现，基于证据规划 pi-ai 补缺、待确认与宽限移除；可恢复目录事务、内容与修订所有权校验，附 provider 设置及监控。",
   "repository": {
     "type": "git",
