@@ -50,6 +50,12 @@
     "preflight:live": "node scripts/preflight-live.mjs",
     "test": "node scripts/test-all.mjs"
   },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@esbuild/win32-x64"
+    ]
+  },
   "dsh": {
     "manifestVersion": 1,
     "bundle": {
