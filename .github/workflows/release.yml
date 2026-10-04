@@ -47,7 +47,10 @@ jobs:
           version: 11
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile --config.onlyBuiltDependencies=esbuild
+        # pnpm 10/11 默认拦截依赖构建脚本，CI 上多轮尝试 onlyBuiltDependencies
+        # （package.json 字段 / pnpm-workspace.yaml / --config 传参）均无效；
+        # 本包依赖很薄，直接用 npm 安装，esbuild 的 postinstall 可正常执行。
+        run: npm install --no-audit --no-fund
 
       - name: Build
         run: |
