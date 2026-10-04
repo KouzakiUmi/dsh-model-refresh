@@ -40,6 +40,11 @@ jobs:
           console.log(`verified ${name}@${version}`);
           NODE
 
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --no-frozen-lockfile
+
       - name: Build
         run: |
           npm run build:client
