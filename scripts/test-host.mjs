@@ -31,7 +31,7 @@ async function setup({ settings = {}, routes = [{ route: 'demo', enabled: true }
   await mkdir(dataDir, { recursive: true });
   for (const route of routes) await writeFile(path.join(dataDir, `${route.route}.json`), JSON.stringify(baseCatalog));
   const statePath = path.join(directory, 'state.json');
-  await writeFile(statePath, JSON.stringify({ version: 3, settings: { patchCatalog: false, autoDiscover: false, litellmEnabled: false, ...settings }, routes, runtime }));
+  await writeFile(statePath, JSON.stringify({ version: 3, settings: { patchCatalog: false, autoDiscover: false, modelsDevFallback: true, ...settings }, routes, runtime }));
   const ctx = context();
   const host = createHost(ctx, { statePath, seedPath: path.join(directory, 'missing-seed.json'), dataDir, fetchFn, initialRefresh: false, ...options });
   controllers.push(host);
@@ -60,12 +60,12 @@ try {
   assert.ok(!(await readdir(root)).some((name) => name.endsWith('.tmp')));
 
   const legacyFile = path.join(root, 'legacy.json');
-  await writeFile(legacyFile, JSON.stringify({ version: 2, settings: { patchCatalog: true, litellmRoutes: { demo: 'vendor' } },
+  await writeFile(legacyFile, JSON.stringify({ version: 2, settings: { patchCatalog: true },
     routes: [{ route: 'demo', enabled: false }], runtime: { running: true, restartRequired: true, catalogPatched: { demo: ['old'] }, catalogRemoved: {} } }));
   const migrated = await loadState(legacyFile);
   assert.equal(migrated.version, STATE_VERSION);
   assert.equal(migrated.settings.patchCatalog, true);
-  assert.equal(migrated.settings.litellmRoutes.demo, 'vendor');
+  assert.equal(migrated.settings.modelsDevFallback, false);
   assert.equal(migrated.runtime.running, false);
   assert.equal(migrated.runtime.restartRequired, false);
   assert.deepEqual(migrated.runtime.legacyProtected.demo, ['old']);
@@ -107,7 +107,7 @@ try {
   assert.equal(queued.host.status().settings.intervalMinutes, 360);
   releaseFetch();
   await Promise.all([refresh, update]);
-  assert.equal(requests, 1);
+  assert.equal(requests, 2, 'one pi-ai refresh attempt followed by the enabled models.dev fallback');
   assert.equal(queued.host.status().settings.intervalMinutes, 2);
   assert.equal(queued.host.status().running, false);
   await assert.rejects(queued.host.updateSettings({ intervalMinutes: 0, patchCatalog: true }), /intervalMinutes/);
@@ -179,15 +179,6 @@ try {
   const pendingArtifact = JSON.parse(await readFile(path.join(pendingCase.directory, 'demo.models.json'), 'utf8'));
   assert.ok(!pendingArtifact.models.some((entry) => entry.id === 'discovered'));
   await pendingCase.host.dispose();
-
-  // Empty models.dev maps permit LiteLLM fallback instead of blocking it.
-  const liteCase = await setup({ settings: { litellmEnabled: true, litellmRoutes: { demo: 'vendor' }, litellmUrl: 'http://127.0.0.1:39999/lite' },
-    fetchFn: async (url) => jsonResponse(url.includes('/lite')
-      ? { 'vendor/old': { mode: 'chat', max_input_tokens: 1000, max_output_tokens: 100 } }
-      : { demo: { models: {} } }) });
-  await liteCase.host.requestRefresh();
-  assert.equal(liteCase.host.status().routes[0].source, 'litellm');
-  await liteCase.host.dispose();
 
   // Logical baseline remembers deletions across rounds; turning the switch off restores once.
   const staleCase = await setup({ settings: { patchCatalog: true, removeStale: true,

@@ -5,7 +5,7 @@ const catalog = { 'anthropic-messages': { old: { id: 'old', name: 'Old', api: 'a
 const md = (id, context = 8192, output = 1024) => ({ id, limit: { context, output }, modalities: { input: ['text'], output: ['text'] } });
 const official = (ids, complete = false, models = {}) => ({ ids: new Set(ids), complete, models });
 const plan = (overrides = {}) => planRoute({ route: 'test', catalog, settings: {}, ...overrides });
-let p = plan({ metadata: { old: md('old') }, source: 'litellm' });
+let p = plan({ metadata: { old: md('old') }, source: 'pi-ai' });
 assert.equal(p.models[0].contextWindow, 262144);
 assert.deepEqual(p.models[0].input, ['text', 'image']);
 assert.equal(p.models[0].reasoning, true);
@@ -19,7 +19,7 @@ assert.equal(p.additions.length, 1, 'incomplete third-party object must not bloc
 p = plan({ official: official(['new', 'old']) });
 assert.equal(p.additions.length, 0);
 assert.match(p.pending[0].reason, /容量|类型/);
-p = plan({ source: 'litellm', metadata: { ghost: md('ghost') }, officialConfigured: true });
+p = plan({ source: 'unknown', metadata: { ghost: md('ghost') }, officialConfigured: true });
 assert.equal(p.additions.length, 0);
 assert.equal(p.pending.length, 1);
 p = plan({ source: 'models.dev', metadata: { ghost: md('ghost') }, official: official(['old']) });

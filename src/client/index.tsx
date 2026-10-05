@@ -59,12 +59,11 @@ type Status = {
   catalogGrantCommand: string | null
   catalogGrantNote: string | null
   settings: {
-    endpoint: string
     intervalMinutes: number
     proxyUrl: string
     patchCatalog: boolean
     removeStale: boolean
-    litellmEnabled: boolean
+    modelsDevFallback: boolean
     officialVerify: boolean
     proxyConfigured: boolean
     outputDir?: string
@@ -76,14 +75,14 @@ type Status = {
   routes: RouteStatus[]
   providerTargets?: { id: string }[]
   providerApplications?: Record<string, unknown>
+  piAiUpstream?: { package: string; version: string | null; checkedAt: string; providerCount: number; modelCount: number; stale: boolean; error: string | null } | null
 }
 type GlobalDraft = {
-  endpoint: string
   intervalMinutes: string
   proxyUrl: string
   patchCatalog: boolean
   removeStale: boolean
-  litellmEnabled: boolean
+  modelsDevFallback: boolean
   officialVerify: boolean
   staleGraceHours: string
   staleConfirmations: string
@@ -136,8 +135,8 @@ function hasIssue(r: RouteStatus): boolean {
   return Boolean(r.error || r.warnings?.length || r.conflicts?.length || r.official === 'failed' || r.official === 'no-key')
 }
 function toGlobalDraft(s: Status['settings']): GlobalDraft {
-  return { endpoint: s.endpoint, intervalMinutes: String(s.intervalMinutes), proxyUrl: s.proxyUrl,
-    patchCatalog: s.patchCatalog, removeStale: s.removeStale, litellmEnabled: s.litellmEnabled,
+  return { intervalMinutes: String(s.intervalMinutes), proxyUrl: s.proxyUrl,
+    patchCatalog: s.patchCatalog, removeStale: s.removeStale, modelsDevFallback: s.modelsDevFallback,
     officialVerify: s.officialVerify, staleGraceHours: String(s.staleGraceHours ?? 24), staleConfirmations: String(s.staleConfirmations ?? 2) }
 }
 function toOfficialDraft(config: OfficialConfig | null | undefined): OfficialDraft {
@@ -245,7 +244,7 @@ function RouteCard(props: {
     <div style={row}>
       <button type="button" style={{ ...button, fontWeight: 600 }} aria-expanded={expanded} onClick={props.onToggle}>{expanded ? '▾' : '▸'} {r.route}</button>
       <label style={row}><input type="checkbox" checked={r.enabled} disabled={busy} onChange={(e) => props.onEnable(e.target.checked)} />启用</label>
-      <span style={badge}>{r.source === 'none' ? '无第三方源' : r.source ?? '尚未刷新'}</span>
+      <span style={badge}>{r.source ?? '尚未刷新'}</span>
       <span style={r.official === 'failed' || r.official === 'no-key' ? warning : badge}>{officialLabel}</span>
       <span style={muted}>{r.models ?? '—'} 个模型 · 发现 {r.added?.length ?? 0} · 已应用 {r.applied?.length ?? '—'} · 待确认 {r.pending?.length ?? 0}</span>
       {hasIssue(r) && <span style={warning}>有异常 / 警告</span>}
@@ -253,7 +252,6 @@ function RouteCard(props: {
     {expanded && <div style={{ marginTop: 12, borderTop: '1px solid var(--dsh-border, #555)', paddingTop: 10 }}>
       <div style={muted}>刷新时间：{fmtTime(r.fetchedAt)} · 目录基线：{fmtTime(r.installedAt)}{r.as ? ` · 元数据映射：${r.as}` : ''}</div>
       <p style={muted}>官方清单返回仅确认模型列出，不代表推理已测通。只有权威套餐全量清单且完整性确认，才可用于缺失判定；缺凭据或拉取失败时保留已有目录。</p>
-      {r.source === 'none' && <p style={muted}>无第三方元数据仍可通过官方清单发现新模型；能力、容量或协议依据不足的条目应进入待确认。</p>}
       {!r.enabled && <p style={warning}>路由已停用。是否恢复或回滚以实际同步记录为准，停用本身不证明回滚成功。</p>}
       {r.error && <div role="alert" style={failure}>路由错误：{r.error}</div>}
       {r.warnings?.map((item, i) => <div key={i} style={warning}>警告：{item}</div>)}
@@ -345,7 +343,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const saveGlobal = async (): Promise<void> => {
     if (!draft) return
     await run(async () => {
-      const body = { ...draft, endpoint: draft.endpoint.trim(), proxyUrl: draft.proxyUrl.trim(),
+      const body = { ...draft, proxyUrl: draft.proxyUrl.trim(),
         expectedRevision: draftRevision.current,
         intervalMinutes: numberValue(draft.intervalMinutes, '刷新间隔', 1, true),
         staleGraceHours: numberValue(draft.staleGraceHours, '缺失宽限期', 1),
@@ -388,7 +386,7 @@ export function ModelRefreshSettings(): JSX.Element {
   const disabled = busy || status?.running === true || status?.initialized === false
   return <div style={{ maxWidth: 920 }}>
     <h2 style={{ marginTop: 0 }}>模型目录刷新</h2>
-    <p style={muted}>官方清单用于发现和核对，第三方元数据用于辅助补缺。已有模型默认保留；存在性、推理协议、套餐范围和真实写入结果分别确认。</p>
+    <p style={muted}>pi-ai 上游提供模型目录、能力与协议信息；官方清单用于发现和核对套餐可用性。已有模型默认保留；存在性、推理协议、套餐范围和真实写入结果分别确认。</p>
     {loadError && <div role="alert" style={{ ...box, ...failure }}>状态读取失败：{loadError}。保留上次状态与未保存草稿。</div>}
     {actionError && <div role="alert" style={{ ...box, ...failure }}>操作失败：{actionError} <button style={button} onClick={() => setActionError(null)}>关闭错误提示</button></div>}
     {notice && <div role="status" style={{ ...box, ...muted }}>{notice}</div>}
@@ -397,6 +395,7 @@ export function ModelRefreshSettings(): JSX.Element {
       <section style={box}>
         <div style={{ ...row, justifyContent: 'space-between' }}><strong>{status.degraded ? '插件启动失败' : status.running ? '正在刷新…' : '刷新就绪'}</strong><span style={muted}>上次运行：{fmtTime(status.lastRun)}</span><button style={button} disabled={disabled} onClick={() => void refreshNow()}>立即刷新</button></div>
         <div style={{ ...row, marginTop: 12 }}><span>{routes.length} 个路由</span><span>{routes.filter((r) => r.enabled).length} 已启用</span><span>{routes.filter(hasIssue).length} 有异常</span><span>发现 {sum('added')}</span><span>已应用 {sum('applied')}{routes.some((r) => r.applied === undefined) ? '（部分路由未报告）' : ''}</span><span>待确认 {sum('pending')}</span><span>已移除 {sum('removed')}</span></div>
+        {status.piAiUpstream && <div style={{ ...row, marginTop: 8 }}><span style={badge}>pi-ai {status.piAiUpstream.version ? `@${status.piAiUpstream.version}` : '不可用'}</span><span style={muted}>{status.piAiUpstream.providerCount} 个 provider · {status.piAiUpstream.modelCount} 个聊天模型 · 检查于 {fmtTime(status.piAiUpstream.checkedAt)}</span>{status.piAiUpstream.stale && <span style={warning}>上游不可用，正在使用缓存：{status.piAiUpstream.error}</span>}{!status.piAiUpstream.version && <span style={warning}>未找到有效上游缓存：{status.piAiUpstream.error}</span>}</div>}
         {status.degraded && <p role="alert" style={failure}>启动失败：{status.lastError ?? '未知原因'}。{status.degradedHint}</p>}
         {status.warnings?.map((item, i) => <p key={i} style={warning}>{item}</p>)}
         {!status.degraded && status.lastError && <p role="alert" style={failure}>最近运行错误：{status.lastError}</p>}
@@ -415,13 +414,13 @@ export function ModelRefreshSettings(): JSX.Element {
       {routes.map((r) => <div key={r.route} hidden={!visible.some((item) => item.route === r.route)}><RouteCard r={r} config={status.settings.officialRoutes?.[r.route]} busy={disabled} expanded={expanded.has(r.route)} onToggle={() => toggleExpand(r.route)} onEnable={(enabled) => void toggleRoute(r.route, enabled)} onSaveOfficial={(config) => saveOfficial(r.route, config)} /></div>)}
       {draft && <section style={{ ...box, marginTop: 18 }}>
         <h3 style={{ marginTop: 0 }}>全局设置</h3>
-        <p style={muted}>轮询不会覆盖未保存的全局草稿。保存后可立即刷新，检查待确认与同步记录。</p>
+        <p style={muted}>模型清单直接同步自 pi-ai 上游。可启用 models.dev 作为上游不可用时的备选来源。</p>
         <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 10 }}>
-          <label>models.dev 数据源 <input style={{ ...input, width: '100%' }} type="url" value={draft.endpoint} onChange={(e) => updateDraft('endpoint', e.target.value)} /></label>
           <div style={row}><label>间隔（分钟） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.intervalMinutes} onChange={(e) => updateDraft('intervalMinutes', e.target.value)} /></label><label>代理 URL（留空直连） <input style={input} value={draft.proxyUrl} placeholder="http://127.0.0.1:7890" onChange={(e) => updateDraft('proxyUrl', e.target.value)} /></label></div>
           <label style={row}><input type="checkbox" checked={draft.patchCatalog} onChange={(e) => updateDraft('patchCatalog', e.target.checked)} />允许同步安装目录 catalog（需写权限）</label>
           <span style={muted}>关闭或停用不代表回滚已完成；结果以真实应用记录、警告与冲突为准。</span>
-          <label style={row}><input type="checkbox" checked={draft.litellmEnabled} onChange={(e) => updateDraft('litellmEnabled', e.target.checked)} />启用 LiteLLM 辅助元数据</label>
+          <label style={row}><input type="checkbox" checked={draft.modelsDevFallback} onChange={(e) => updateDraft('modelsDevFallback', e.target.checked)} />启用 models.dev 备选（仅 pi-ai 上游不可用时；默认关闭）</label>
+          {draft.modelsDevFallback && <span style={muted}>pi-ai 上游不可用时才读取 models.dev；它不会覆盖 pi-ai 数据。</span>}
           <label style={row}><input type="checkbox" checked={draft.officialVerify} onChange={(e) => updateDraft('officialVerify', e.target.checked)} />启用官方清单核对与补缺（无第三方源也可发现）</label>
           <label style={row}><input type="checkbox" checked={draft.removeStale} onChange={(e) => updateDraft('removeStale', e.target.checked)} />允许移除官方完整清单连续确认缺失的模型</label>
           <div style={row}><label>缺失宽限期（小时） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.staleGraceHours} onChange={(e) => updateDraft('staleGraceHours', e.target.value)} /></label><label>连续确认次数 <input style={{ ...input, width: 100 }} type="number" min={2} step={1} value={draft.staleConfirmations} onChange={(e) => updateDraft('staleConfirmations', e.target.value)} /></label></div>

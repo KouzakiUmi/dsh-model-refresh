@@ -8,7 +8,9 @@ import { createHost } from '../lib/index.js';
 const root = await mkdtemp(path.join(tmpdir(), 'refresh-http-integration-'));
 const server = createServer((req, res) => {
   res.setHeader('content-type', 'application/json');
-  if (req.url === '/upstream') { res.writeHead(503); res.end(JSON.stringify({ error: 'fixture source outage' })); return; }
+  if (req.url === '/models-dev') { res.end(JSON.stringify({ demo: { models: {
+    'new-chat': { id: 'new-chat', name: 'New chat', mode: 'chat', limit: { context: 8192, output: 1024 }, modalities: { input: ['text'], output: ['text'] } }
+  } } })); return; }
   res.end(JSON.stringify({ data: [{ id: 'known' }, { id: 'new-chat', mode: 'chat', context_length: 8192, max_output_tokens: 1024 }] }));
 });
 let host;
@@ -22,10 +24,11 @@ try {
       contextWindow: 4096, maxTokens: 512, input: ['text'] }
   } }));
   await writeFile(path.join(dataDir, '.manifest.json'), JSON.stringify({ generatedAt: 'fixture' }));
-  await writeFile(statePath, JSON.stringify({ version: 3, settings: { endpoint: `${base}/upstream`, autoDiscover: false,
-    litellmEnabled: false, patchCatalog: true, officialRoutes: { demo: { auth: 'none', endpoint: `${base}/list` } } },
+  await writeFile(statePath, JSON.stringify({ version: 3, settings: { endpoint: `${base}/models-dev`, autoDiscover: false,
+    modelsDevFallback: true, patchCatalog: true, officialRoutes: { demo: { auth: 'none', endpoint: `${base}/list` } } },
     routes: [{ route: 'demo', enabled: true }], runtime: {} }));
-  host = createHost({ on() {}, logger: { info() {} } }, { statePath, dataDir, seedPath: path.join(root, 'none') });
+  host = createHost({ on() {}, logger: { info() {} } }, { statePath, dataDir, seedPath: path.join(root, 'none'),
+    fetchFn: (url, init) => url.includes('registry.npmjs.org') ? Promise.resolve({ ok: false, status: 503, body: null }) : fetch(url, init) });
   await host.ready;
   const artifact = JSON.parse(await readFile(path.join(root, 'demo.models.json'), 'utf8'));
   assert.ok(artifact.models.some(m => m.id === 'new-chat' && m.contextWindow === 8192));
@@ -33,7 +36,6 @@ try {
   const catalog = JSON.parse(await readFile(path.join(dataDir, 'demo.json'), 'utf8'));
   assert.equal(catalog['anthropic-messages']['new-chat'].api, 'anthropic-messages');
   assert.equal(catalog['openai-completions'], undefined);
-  assert.match(host.status().lastError, /503/);
   assert.equal(host.status().routes[0].official, 'verified');
   assert.equal(host.status().routes[0].officialComplete, false);
   assert.deepEqual(host.status().routes[0].applied, ['new-chat']);

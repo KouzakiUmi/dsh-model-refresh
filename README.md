@@ -1,4 +1,4 @@
-# dsh-model-refresh · v0.7.0
+# dsh-model-refresh · v0.7.1
 
 将 pi-ai 静态模型目录的补缺做成可独立升级的 DSH bundle。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
 
@@ -6,7 +6,7 @@
 
 ## 功能概览
 
-- models.dev、LiteLLM 与 provider 官方清单相互独立，单源失败不会清空其它证据。
+- 直接读取最新发布的 pi-ai 模型目录；models.dev 仅作为可选备份源，默认关闭。
 - 对协议、上下文容量、输出容量和聊天用途缺少证据的新模型进入待确认，不使用邻居猜测。
 - catalog 写入默认关闭；启用后使用协调锁、写前 journal、修订指纹和内容所有权校验。
 - 删除要求权威完整清单、连续缺失确认和宽限期，失败或分页清单不会触发删除。
@@ -36,7 +36,6 @@ Host 或 bundle 源码变更后通常需要重载对应 DSH 消费进程。catal
 
 ```json
 {
-  "endpoint": "https://models.dev/api.json",
   "intervalMinutes": 360,
   "routes": [
     {
@@ -69,10 +68,10 @@ Host 或 bundle 源码变更后通常需要重载对应 DSH 消费进程。catal
 
 ### 自动发现与目录事务
 
-1. **数据源互相独立**：models.dev / LiteLLM 失败或没有 provider 数据，不会阻断官方清单发现、已有目录保留或停用回滚。单个 provider 失败不终止其它 provider。
-2. **证据不混用**：第三方数据库提供元数据；官方清单提供正向存在性证据；`GET /models` 成功并不证明推理协议正确、套餐支持全部条目，或推理已测通。401/403 不是端点正确的证明。
-3. **不再猜容量和协议**：新模型必须有有效上下文/输出容量以及明确协议、推理 baseUrl。官方容量 > 精确匹配的第三方容量 > 用户显式默认值。删除旧版“邻居众数 / 200000、64000”兜底。缺依据进入待确认，不能进入已应用列表。
-4. **不污染原生目录**：已有模型的原生容量、image/reasoning 等不被第三方旧数据覆盖；第三方仅填空，明确官方字段可更新路由产物。既有原生 catalog 元数据不再批量改写。
+1. **pi-ai 是模型目录唯一主源**：启动/手动刷新查询 npm 最新 pi-ai 版本，仅版本改变时下载并校验官方包的完整性与 provider 文件散列。完整 catalog 缓存于状态目录；上游故障时保留旧缓存。models.dev 备选开关默认关闭。
+2. **模型和服务可用性分开核对**：上游 pi-ai 决定候选 ID、协议与能力；可选 provider 官方清单只提供本套餐的正向存在性证据。`GET /models` 成功不证明套餐完整或推理已测通。401/403 不是端点正确的证明。
+3. **不猜模型字段**：新增模型使用 pi-ai 上游提供的上下文、输出、输入模态、推理能力、协议和端点；缺字段或协议无法匹配当前目录时进入待确认。
+4. **不污染原生目录**：已有模型的原生容量、image/reasoning 等不被外部旧数据覆盖；只同步 pi-ai 同一 provider、同一模型 ID 的记录。
 5. **删除必须有负向证据**：仅用户明确确认当前套餐权威全量清单（`complete: true`），且响应没有分页/不完整迹象，连续确认缺失并过宽限期后，才产生移除计划。默认 24 小时 + 2 次；失败、缺 key、部分页会中断连续观察。`keep`、命名空间对应及同步冲突保护目录和路由产物两侧。
 6. **真实写入才发布**：候选发现、待确认、实际写入、实际移除分别计数。目录写入关闭或失败时，未知 ID 不进入可消费的路由产物，避免 `needs an api`。
 7. **回滚必须证明所有权**：新台账记录 protocol + ID + before/after + 包/manifest 修订指纹。只有当前内容和目录修订都匹配才能回滚。上游升级收录同 ID、甚至内容相同，修订变化也会释放所有权、保留模型。
@@ -80,11 +79,12 @@ Host 或 bundle 源码变更后通常需要重载对应 DSH 消费进程。catal
 ## 架构
 
 ```text
-models.dev ─┐
-LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
-官方清单 ───┤          │
-安装目录 ───┘          ├─> catalog-store（锁 + 写前日志 + 所有权校验）
-                      └─> 实际目录核对后输出路由产物 + 监控
+pi-ai npm catalog ─> 精确 provider / model 匹配 ─┐
+可选 models.dev 备选 ───────────────────────────┼─> planner（能力/协议/删除计划）
+官方清单 ──────────────────────────────────────┤
+安装目录 ──────────────────────────────────────┘
+                    ├─> catalog-store（锁 + 写前日志 + 所有权校验）
+                    └─> 实际目录核对后输出路由产物 + 监控
 ```
 
 - `lib/official.mjs`：安全鉴权、明确清单 URL 或兼容路径、响应形状验证、分页信号、容量和类型提取。仅 404 尝试下一个候选，禁止携带凭据自动重定向；401/403 直接报鉴权拒绝。
@@ -93,7 +93,7 @@ LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
 - `lib/index.js`：启动/定时/手动/配置共用队列；重复刷新去重；每轮配置快照；dispose 先取消网络并等待队列收敛，在状态与 catalog 不再可能迟到写入后才释放生命周期租约；源/路由错误分别保留。
 - `lib/state.mjs`：v3 状态和 v1/v2 迁移，损坏 JSON / 未来版本拒绝覆盖。
 - `lib/manual-models.mjs`：手动模型与兼容字段验证；`lib/provider-config.mjs`：官方配置编辑、预览指纹、应用/撤销所有权及提交恢复。
-- `lib/metadata.mjs`：按精确 ID 和字段合并 models.dev / LiteLLM，并保留来源；近似来源不能冒充官方可用性证据。
+- `lib/pi-ai-upstream.mjs`：获取 npm 最新 pi-ai 发布包，校验完整性和 provider 文件散列，归一化并缓存模型目录。
 - `lib/host-{io,http,lease}.mjs`：原子持久化、严格同源 loopback Web API、有界 JSON 请求、Host 状态生命周期锁。
 - `src/client/index.tsx`：默认折叠，搜索筛选，应用/待确认/冲突监控；provider 官方端点、凭据名称、协议、完整性和容量配置；代理及全局开关；授权说明独立弹窗。
 - `src/client/ManualModels.tsx`：独立手动模型编辑、能力声明和配置预览/应用/撤销流程。
@@ -115,7 +115,7 @@ LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
 
 首次迁移会先把原始状态备份为 `state.json.pre-v3-<时间戳>.bak`；备份成功后才允许写 v3。若需要退回旧版，先停止 Host、回滚代码，再人工恢复对应旧状态备份，不能让 v0.5 直接读取 v3 状态（旧版会丢弃不认识的版本）。
 
-已有 v2 状态迁移到 v3 时保留 settings、provider 开关、排除/保留名单及 LiteLLM 映射。旧新增台账只有 ID，不能证明所有权：迁入 `runtime.legacyProtected`，**不自动删除这些历史新增条目**。旧删除备份只恢复缺失条目，不覆盖或制造跨协议重复 ID。旧版已经覆盖的原生元数据无法凭旧台账恢复，本版不假称能还原。
+已有 v2 状态迁移到 v3 时保留支持的 settings、provider 开关及排除/保留名单；旧版已移除的数据源配置不再使用。旧新增台账只有 ID，不能证明所有权：迁入 `runtime.legacyProtected`，**不自动删除这些历史新增条目**。旧删除备份只恢复缺失条目，不覆盖或制造跨协议重复 ID。旧版已经覆盖的原生元数据无法凭旧台账恢复，本版不假称能还原。
 
 ### 每 provider 官方配置
 
@@ -143,7 +143,7 @@ LiteLLM ───┼─> planner（纯函数证据/能力/协议/删除计划）
 - `assumeChat` 默认 false：容量和 ID 本身不证明聊天用途；没有明确类型元数据的官方新 ID 进入待确认。只有用户明确确认套餐未知 ID 的聊天用途时才允许 text-only 补缺；明确非聊天类型始终拒绝。
 - `complete` 默认 false，完整性未确认也可以使用正向发现，但不能删模型。HTTP Link、has_more、next_cursor 等分页迹象强制降级为部分清单；当前不自动追页。
 - `null` 禁用该 route 的官方请求；默认内置表包含 kimi-coding、zai-coding-cn、fireworks、together、Qwen token plan 三路、vercel-ai-gateway。其它 provider 可显式配置，不伪造全覆盖。Azure 的通用模型 ID 不等于 deployment ID，无法从通用数据库证明可用部署。
-- LiteLLM 中 moonshot/zai/dashscope 与 Coding 套餐只是候选元数据映射，不是套餐支持声明；缺官方确认时不发布近似源新模型。
+- models.dev 只在 pi-ai 上游不可用且用户启用备选时读取；它不会覆盖 pi-ai 模型或提供推理可用性保证。
 
 Web API：`GET /plugins/dsh-model-refresh/status`；`POST .../refresh`、`.../config`、`.../route`。POST 必须精确同源 Origin、loopback Host、application/json；64 KiB / 10 秒有界 body。配置使用 `expectedRevision` 乐观锁，避免不同页面覆盖草稿；轮询不覆盖未保存的表单。
 

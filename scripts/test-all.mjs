@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const tests = ['test-merge.mjs', 'test-catalog-patch.mjs', 'test-litellm.mjs', 'test-official.mjs',
+const tests = ['test-merge.mjs', 'test-catalog-patch.mjs', 'test-official.mjs',
   'test-planner.mjs', 'test-store.mjs', 'test-host.mjs', 'test-lease-reclaim.mjs', 'test-integration.mjs', 'test-expression.mjs', 'test-manual.mjs', 'test-client.mjs'];
 for (const test of tests) {
   console.log(`\n=== ${test} ===`);

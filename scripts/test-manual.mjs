@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { validateManualModel, validateCompat } from '../lib/manual-models.mjs';
 import { buildProviderProfile, changeProvider, providerPreviewHash, recoverProviderTransactions } from '../lib/provider-config.mjs';
-import { combineMetadata } from '../lib/metadata.mjs';
 import { planRoute } from '../lib/planner.mjs';
 import { createHost } from '../lib/index.js';
 import { acquireStateLease } from '../lib/host-lease.mjs';
@@ -65,10 +64,8 @@ try {
 
   const chat = { id: 'chat', mode: 'chat', tool_call: false, limit: { context: 8192, output: 1024 }, modalities: { output: ['text'] } };
   assert.equal(planRoute({ route: 'demo', catalog, source: 'models.dev', metadata: { chat } }).additions.length, 1);
-  const combined = combineMetadata({ old: { id: 'old', limit: { context: 8192, output: null } } }, { old: { id: 'old', limit: { context: 4096, output: 1024 } }, chat });
-  assert.equal(combined.models.old.limit.output, 1024);
-  assert.equal(combined.models.old.limit.context, 8192);
-  assert.equal(planRoute({ route: 'demo', catalog, source: 'models.dev', metadata: combined.models, metadataSources: combined.sources }).additions.length, 0, 'approximate-only new ID still requires official availability');
+  assert.equal(planRoute({ route: 'demo', catalog, source: 'models.dev', metadata: { chat }, officialConfigured: true }).additions.length, 0,
+    'fallback-source candidates still require configured official availability evidence');
 
   const dataDir = path.join(root, 'data'); await mkdir(dataDir);
   await writeFile(path.join(dataDir, 'demo.json'), JSON.stringify(catalog));

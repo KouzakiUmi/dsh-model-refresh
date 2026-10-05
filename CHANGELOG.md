@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-05
+
+### Changed
+
+- Download and validate the latest published pi-ai npm provider catalog at runtime; show upstream version and cache status in settings.
+- Make models.dev an opt-in fallback, disabled by default, and remove LiteLLM code and settings.
+
 ## [0.7.0] - 2026-10-04
 
 ### Added
@@ -24,6 +31,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Remove LiteLLM fetching, configuration, and the matching test suite.
 - Reclaim a stale Host state lease only when the recorded PID is provably dead; archive the old lock before taking ownership.
 - Add a synchronous process-exit cleanup fallback for an owned state lease.
 - Keep the state lease until queued refresh and catalog work has fully settled during normal disposal, preventing a replacement Host from overlapping late state or catalog writes.
@@ -46,7 +54,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - Reworked discovery around independent evidence sources, explicit protocol/capacity requirements, transactional catalog writes, ownership-aware rollback, and conservative stale removal.
 
-[Unreleased]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/v0.6.10...v0.7.0
 [0.6.2]: https://github.com/KouzakiUmi/dsh-model-refresh/compare/ac1ba92...v0.6.2
 [0.6.1]: https://github.com/KouzakiUmi/dsh-model-refresh/commit/ac1ba92
