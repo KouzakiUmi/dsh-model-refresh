@@ -1,4 +1,4 @@
-# dsh-model-refresh · v0.7.1
+# dsh-model-refresh · v0.7.2
 
 将 pi-ai 静态模型目录的补缺做成可独立升级的 DSH bundle。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
 
