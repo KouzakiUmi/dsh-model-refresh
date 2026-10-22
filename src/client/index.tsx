@@ -5,6 +5,8 @@ import { ManualModels } from './ManualModels'
 import type { ManualModel } from './ManualModels'
 
 const BASE = '/plugins/dsh-model-refresh'
+/** Namespace every llm-pi-ai provider shares in the models page (`ctx.fiber.entry.options.id`). */
+const PI_AI_NAMESPACE = 'llm-pi-ai'
 type Protocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
 type OfficialConfig = {
   endpoint?: string
@@ -16,6 +18,17 @@ type OfficialConfig = {
   assumeChat?: boolean
   contextWindow?: number
   maxTokens?: number
+}
+type ModelState = 'ok' | 'added' | 'pending' | 'stale' | 'unverified'
+type ModelRow = {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
+  input?: string[]
+  reasoning?: boolean
+  state: ModelState
+  reason?: string
 }
 type RouteStatus = {
   route: string
@@ -31,6 +44,7 @@ type RouteStatus = {
   officialComplete?: boolean
   officialAdded?: string[]
   models?: number
+  modelList?: ModelRow[]
   added?: string[]
   updated?: string[]
   stale?: string[]
@@ -220,6 +234,55 @@ function GrantDialog(props: { command: string; note: string; onClose: () => void
 function IdList(props: { label: string; ids?: string[]; unknown?: string }): JSX.Element {
   return <div style={{ fontSize: 13, marginTop: 5, overflowWrap: 'anywhere' }}><strong>{props.label}</strong> {props.ids === undefined ? (props.unknown ?? '尚无记录') : `${props.ids.length}：${props.ids.join('、') || '—'}`}</div>
 }
+const MODEL_STATES: Record<ModelState, { label: string; color: string }> = {
+  ok: { label: '可用', color: 'var(--dsh-success, #3fb950)' },
+  added: { label: '新增', color: 'var(--dsh-accent, #58a6ff)' },
+  pending: { label: '待确认', color: 'var(--dsh-warning, #d29922)' },
+  stale: { label: '缺失', color: 'var(--dsh-warning, #d29922)' },
+  unverified: { label: '未验证', color: 'var(--dsh-muted, #8b949e)' },
+}
+function fmtTokens(value?: number): string {
+  if (typeof value !== 'number' || value <= 0) return '—'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`
+  if (value >= 1024) return `${Math.round(value / 1024)}K`
+  return String(value)
+}
+function ModelTable(props: { rows: ModelRow[]; filter: string; onFilter: (value: string) => void }): JSX.Element {
+  const counts: Record<string, number> = { all: props.rows.length }
+  for (const row of props.rows) counts[row.state] = (counts[row.state] ?? 0) + 1
+  const visible = props.filter === 'all' ? props.rows : props.rows.filter((row) => row.state === props.filter)
+  const order: ModelState[] = ['pending', 'added', 'stale', 'unverified', 'ok']
+  const ordered = [...visible].sort((a, b) => order.indexOf(a.state) - order.indexOf(b.state) || a.id.localeCompare(b.id))
+  return <div style={{ marginTop: 8 }}>
+    <div style={{ ...row, flexWrap: 'wrap', gap: 6 }}>
+      {(['all', 'ok', 'added', 'pending', 'stale', 'unverified'] as const).map((key) => {
+        const label = key === 'all' ? '全部' : MODEL_STATES[key as ModelState].label
+        const active = props.filter === key
+        return <button key={key} type="button" style={{ ...button, fontWeight: active ? 600 : 400, opacity: counts[key] ? 1 : 0.5 }}
+          onClick={() => props.onFilter(key)}>{label} {counts[key] ?? 0}</button>
+      })}
+    </div>
+    {ordered.length === 0
+      ? <p style={muted}>此筛选下没有模型。</p>
+      : <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 6 }}>
+        <thead><tr style={{ textAlign: 'left' }}>
+          <th style={{ padding: '4px 6px', width: 72 }}>状态</th>
+          <th style={{ padding: '4px 6px' }}>模型</th>
+          <th style={{ padding: '4px 6px', width: 110 }}>上下文 / 输出</th>
+          <th style={{ padding: '4px 6px' }}>备注</th>
+        </tr></thead>
+        <tbody>{ordered.map((row) => {
+          const meta = MODEL_STATES[row.state]
+          return <tr key={row.id} style={{ borderTop: '1px solid var(--dsh-border, #333)' }}>
+            <td style={{ padding: '4px 6px', color: meta.color, whiteSpace: 'nowrap' }}>{meta.label}</td>
+            <td style={{ padding: '4px 6px', overflowWrap: 'anywhere' }}><code>{row.id}</code>{row.reasoning ? <span style={muted}> · 思考</span> : null}{row.input?.includes('image') ? <span style={muted}> · 图像</span> : null}</td>
+            <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>{fmtTokens(row.contextWindow)} / {fmtTokens(row.maxTokens)}</td>
+            <td style={{ padding: '4px 6px', ...muted }}>{row.reason ?? (row.name && row.name !== row.id ? row.name : '')}</td>
+          </tr>
+        })}</tbody>
+      </table>}
+  </div>
+}
 function RouteCard(props: {
   r: RouteStatus; busy: boolean; expanded: boolean; config?: OfficialConfig | null
   onToggle: () => void; onEnable: (enabled: boolean) => void
@@ -228,6 +291,7 @@ function RouteCard(props: {
   const { r, busy, expanded } = props
   const [draft, setDraft] = useState(() => toOfficialDraft(props.config))
   const [localError, setLocalError] = useState<string | null>(null)
+  const [modelFilter, setModelFilter] = useState('all')
   const dirty = useRef(false)
   useEffect(() => { if (!dirty.current) setDraft(toOfficialDraft(props.config)) }, [props.config])
   const change = <K extends keyof OfficialDraft>(key: K, value: OfficialDraft[K]): void => {
@@ -240,31 +304,38 @@ function RouteCard(props: {
   }
   const officialLabel = r.official === 'verified' ? `官方清单已返回${r.officialComplete === true ? ' · 完整' : ' · 完整性未确认'}`
     : r.official === 'failed' ? '官方清单拉取失败' : r.official === 'no-key' ? '官方清单缺凭据' : '官方清单未核对'
+  const modelRows = r.modelList ?? []
+  const pendingCount = modelRows.filter((m) => m.state === 'pending').length
+  const addedCount = modelRows.filter((m) => m.state === 'added').length
   return <section style={box}>
     <div style={row}>
       <button type="button" style={{ ...button, fontWeight: 600 }} aria-expanded={expanded} onClick={props.onToggle}>{expanded ? '▾' : '▸'} {r.route}</button>
       <label style={row}><input type="checkbox" checked={r.enabled} disabled={busy} onChange={(e) => props.onEnable(e.target.checked)} />启用</label>
-      <span style={badge}>{r.source ?? '尚未刷新'}</span>
       <span style={r.official === 'failed' || r.official === 'no-key' ? warning : badge}>{officialLabel}</span>
-      <span style={muted}>{r.models ?? '—'} 个模型 · 发现 {r.added?.length ?? 0} · 已应用 {r.applied?.length ?? '—'} · 待确认 {r.pending?.length ?? 0}</span>
+      <span style={muted}>{r.models ?? '—'} 个模型{pendingCount ? ` · 待确认 ${pendingCount}` : ''}{addedCount ? ` · 新增 ${addedCount}` : ''}</span>
       {hasIssue(r) && <span style={warning}>有异常 / 警告</span>}
     </div>
     {expanded && <div style={{ marginTop: 12, borderTop: '1px solid var(--dsh-border, #555)', paddingTop: 10 }}>
       <div style={muted}>刷新时间：{fmtTime(r.fetchedAt)} · 目录基线：{fmtTime(r.installedAt)}{r.as ? ` · 元数据映射：${r.as}` : ''}</div>
-      <p style={muted}>官方清单返回仅确认模型列出，不代表推理已测通。只有权威套餐全量清单且完整性确认，才可用于缺失判定；缺凭据或拉取失败时保留已有目录。</p>
       {!r.enabled && <p style={warning}>路由已停用。是否恢复或回滚以实际同步记录为准，停用本身不证明回滚成功。</p>}
       {r.error && <div role="alert" style={failure}>路由错误：{r.error}</div>}
       {r.warnings?.map((item, i) => <div key={i} style={warning}>警告：{item}</div>)}
       {r.conflicts?.map((item, i) => <div key={i} style={warning}>同步冲突：{item}</div>)}
-      <IdList label="发现新增（diff.added，不等于写入成功）" ids={r.added} />
-      <IdList label="真实已应用" ids={r.applied} unknown="后端尚未提供应用记录，不能推断已写入" />
-      <IdList label="实际已移除" ids={r.removed} unknown="后端尚未提供移除记录" />
-      <IdList label="官方补缺候选" ids={r.officialAdded} />
-      <IdList label="缺失候选（不等于已删除）" ids={r.stale} />
-      <IdList label="未验证候选" ids={r.unverified} />
-      <IdList label="固定保留" ids={r.keep} /><IdList label="固定排除" ids={r.exclude} />
-      {(r.pending?.length ?? 0) > 0 && <div style={{ marginTop: 8 }}><strong>待确认 {r.pending?.length}</strong><ul style={{ ...muted, overflowWrap: 'anywhere' }}>{r.pending?.map((item, i) => <li key={`${item.id}-${i}`}><code>{item.id}</code>：{item.reason}</li>)}</ul></div>}
-      <div style={{ ...muted, marginTop: 8, overflowWrap: 'anywhere' }}>实际核对端点：{r.officialEndpoint ?? '尚无记录'}</div>
+      {modelRows.length > 0
+        ? <ModelTable rows={modelRows} filter={modelFilter} onFilter={setModelFilter} />
+        : <p style={muted}>尚无模型记录；执行一次刷新后这里会列出每个模型及其状态。</p>}
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer' }}>诊断详情</summary>
+        <p style={muted}>以下为原始分类，用于排查异常。主表已按模型合并展示。</p>
+        <IdList label="发现新增（diff.added，不等于写入成功）" ids={r.added} />
+        <IdList label="真实已应用" ids={r.applied} unknown="后端尚未提供应用记录，不能推断已写入" />
+        <IdList label="实际已移除" ids={r.removed} unknown="后端尚未提供移除记录" />
+        <IdList label="官方补缺候选" ids={r.officialAdded} />
+        <IdList label="缺失候选（不等于已删除）" ids={r.stale} />
+        <IdList label="未验证候选" ids={r.unverified} />
+        <IdList label="固定保留" ids={r.keep} /><IdList label="固定排除" ids={r.exclude} />
+        <div style={{ ...muted, marginTop: 8, overflowWrap: 'anywhere' }}>实际核对端点：{r.officialEndpoint ?? '尚无记录'}</div>
+      </details>
       <details style={{ marginTop: 12 }}>
         <summary style={{ cursor: 'pointer' }}>官方清单高级配置{dirty.current ? '（草稿未保存）' : ''}</summary>
         <p style={muted}>仅配置端点、协议与凭据名称，不输入真实密钥。空字段允许后端采用已验证默认值；未知协议不得猜测。完整性默认关闭。</p>
@@ -385,8 +456,8 @@ export function ModelRefreshSettings(): JSX.Element {
   const sum = (key: 'added' | 'applied' | 'pending' | 'removed'): number => routes.reduce((n, r) => n + (r[key]?.length ?? 0), 0)
   const disabled = busy || status?.running === true || status?.initialized === false
   return <div style={{ maxWidth: 920 }}>
-    <h2 style={{ marginTop: 0 }}>模型目录刷新</h2>
-    <p style={muted}>pi-ai 上游提供模型目录、能力与协议信息；官方清单用于发现和核对套餐可用性。已有模型默认保留；存在性、推理协议、套餐范围和真实写入结果分别确认。</p>
+    <h2 style={{ marginTop: 0 }}>模型目录刷新（高级）</h2>
+    <p style={muted}>日常用法：在「模型」页每个 provider 卡片上点「从端点获取可用模型」，即可看到该服务商真正提供的模型并一键追加。本页只用于诊断、批量核对与移除策略。</p>
     {loadError && <div role="alert" style={{ ...box, ...failure }}>状态读取失败：{loadError}。保留上次状态与未保存草稿。</div>}
     {actionError && <div role="alert" style={{ ...box, ...failure }}>操作失败：{actionError} <button style={button} onClick={() => setActionError(null)}>关闭错误提示</button></div>}
     {notice && <div role="status" style={{ ...box, ...muted }}>{notice}</div>}
@@ -413,23 +484,125 @@ export function ModelRefreshSettings(): JSX.Element {
       {visible.length === 0 && <p style={muted}>没有匹配的路由。</p>}
       {routes.map((r) => <div key={r.route} hidden={!visible.some((item) => item.route === r.route)}><RouteCard r={r} config={status.settings.officialRoutes?.[r.route]} busy={disabled} expanded={expanded.has(r.route)} onToggle={() => toggleExpand(r.route)} onEnable={(enabled) => void toggleRoute(r.route, enabled)} onSaveOfficial={(config) => saveOfficial(r.route, config)} /></div>)}
       {draft && <section style={{ ...box, marginTop: 18 }}>
-        <h3 style={{ marginTop: 0 }}>全局设置</h3>
-        <p style={muted}>模型清单直接同步自 pi-ai 上游。可启用 models.dev 作为上游不可用时的备选来源。</p>
-        <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, display: 'grid', gap: 10 }}>
-          <div style={row}><label>间隔（分钟） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.intervalMinutes} onChange={(e) => updateDraft('intervalMinutes', e.target.value)} /></label><label>代理 URL（留空直连） <input style={input} value={draft.proxyUrl} placeholder="http://127.0.0.1:7890" onChange={(e) => updateDraft('proxyUrl', e.target.value)} /></label></div>
-          <label style={row}><input type="checkbox" checked={draft.patchCatalog} onChange={(e) => updateDraft('patchCatalog', e.target.checked)} />允许同步安装目录 catalog（需写权限）</label>
-          <span style={muted}>关闭或停用不代表回滚已完成；结果以真实应用记录、警告与冲突为准。</span>
-          <label style={row}><input type="checkbox" checked={draft.modelsDevFallback} onChange={(e) => updateDraft('modelsDevFallback', e.target.checked)} />启用 models.dev 备选（仅 pi-ai 上游不可用时；默认关闭）</label>
-          {draft.modelsDevFallback && <span style={muted}>pi-ai 上游不可用时才读取 models.dev；它不会覆盖 pi-ai 数据。</span>}
-          <label style={row}><input type="checkbox" checked={draft.officialVerify} onChange={(e) => updateDraft('officialVerify', e.target.checked)} />启用官方清单核对与补缺（无第三方源也可发现）</label>
-          <label style={row}><input type="checkbox" checked={draft.removeStale} onChange={(e) => updateDraft('removeStale', e.target.checked)} />允许移除官方完整清单连续确认缺失的模型</label>
-          <div style={row}><label>缺失宽限期（小时） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.staleGraceHours} onChange={(e) => updateDraft('staleGraceHours', e.target.value)} /></label><label>连续确认次数 <input style={{ ...input, width: 100 }} type="number" min={2} step={1} value={draft.staleConfirmations} onChange={(e) => updateDraft('staleConfirmations', e.target.value)} /></label></div>
-          <span style={warning}>默认 24 小时宽限期 + 2 次完整官方清单确认。第三方缺失、缺凭据、请求失败或清单不完整均不能作为删除依据；固定保留与同步冲突应阻止删除。</span>
-          <div style={row}><button style={button} onClick={() => void saveGlobal()}>保存全局设置</button><button style={button} onClick={() => { const reset = toGlobalDraft(status.settings); setDraft(reset); globalBase.current = reset; draftRevision.current = status.settingsRevision }}>放弃全局草稿</button></div>
-        </fieldset>
+        <details>
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>全局设置 · 检查间隔、代理、写入权限与移除策略</summary>
+          <p style={muted}>模型清单同步自 pi-ai 上游；官方清单用于核对套餐可用性。默认不写安装目录、不移除模型。</p>
+          <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: '10px 0 0', display: 'grid', gap: 10 }}>
+            <div style={row}><label>间隔（分钟） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.intervalMinutes} onChange={(e) => updateDraft('intervalMinutes', e.target.value)} /></label><label>代理 URL（留空直连） <input style={input} value={draft.proxyUrl} placeholder="http://127.0.0.1:7890" onChange={(e) => updateDraft('proxyUrl', e.target.value)} /></label></div>
+            <label style={row}><input type="checkbox" checked={draft.patchCatalog} onChange={(e) => updateDraft('patchCatalog', e.target.checked)} />允许同步安装目录 catalog（需写权限）</label>
+            <label style={row}><input type="checkbox" checked={draft.modelsDevFallback} onChange={(e) => updateDraft('modelsDevFallback', e.target.checked)} />pi-ai 上游不可用时改用 models.dev 备选</label>
+            <label style={row}><input type="checkbox" checked={draft.officialVerify} onChange={(e) => updateDraft('officialVerify', e.target.checked)} />启用官方清单核对与补缺</label>
+            <details>
+              <summary style={{ cursor: 'pointer', ...muted }}>移除策略（默认关闭；只有权威全量清单连续确认缺失才会移除）</summary>
+              <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                <label style={row}><input type="checkbox" checked={draft.removeStale} onChange={(e) => updateDraft('removeStale', e.target.checked)} />允许移除连续确认缺失的模型</label>
+                <div style={row}><label>缺失宽限期（小时） <input style={{ ...input, width: 110 }} type="number" min={1} value={draft.staleGraceHours} onChange={(e) => updateDraft('staleGraceHours', e.target.value)} /></label><label>连续确认次数 <input style={{ ...input, width: 100 }} type="number" min={2} step={1} value={draft.staleConfirmations} onChange={(e) => updateDraft('staleConfirmations', e.target.value)} /></label></div>
+              </div>
+            </details>
+            <div style={row}><button style={button} onClick={() => void saveGlobal()}>保存全局设置</button><button style={button} onClick={() => { const reset = toGlobalDraft(status.settings); setDraft(reset); globalBase.current = reset; draftRevision.current = status.settingsRevision }}>放弃全局草稿</button></div>
+          </fieldset>
+        </details>
       </section>}
     </>}
     {grantOpen && status?.catalogGrantCommand && <GrantDialog command={status.catalogGrantCommand} note={status.catalogGrantNote ?? ''} onClose={closeGrant} />}
+  </div>
+}
+
+type DiscoverCandidate = {
+  id: string
+  name?: string
+  contextWindow?: number
+  maxTokens?: number
+  reasoning?: boolean
+  configured: boolean
+}
+type DiscoverResult = {
+  route: string
+  namespace: string
+  profileHash: string
+  api: string
+  baseURL: string
+  endpoint: string
+  partial: boolean
+  fetchedAt: string
+  configured: string[]
+  candidates: DiscoverCandidate[]
+  filtered: { id: string; reason: string }[]
+}
+/**
+ * 一键从 provider 自己的 `/models` 端点取真实清单，勾选后直接追加到该 provider 的
+ * `models` 配置。只追加、不改写已有条目；拉取与写入都不发推理请求。
+ */
+function ProviderFetch(props: { provider?: { provider?: string; id?: string; settingsNs?: string } }): JSX.Element {
+  const route = props.provider?.provider ?? props.provider?.id ?? ''
+  const namespace = props.provider?.settingsNs ?? PI_AI_NAMESPACE
+  return route ? <ProviderFetchPanel key={`${namespace}/${route}`} route={route} namespace={namespace} /> : <></>
+}
+function ProviderFetchPanel({ route, namespace }: { route: string; namespace: string }): JSX.Element {
+  const active = useRef(true)
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [data, setData] = useState<DiscoverResult | null>(null)
+  const [message, setMessage] = useState('')
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+  const run = async (notice = ''): Promise<void> => {
+    setPhase('loading'); setMessage(notice); setData(null); setPicked(new Set())
+    try {
+      const next = await postJson<DiscoverResult>(`${BASE}/discover`, { route, namespace })
+      if (!active.current) return
+      setData(next); setOpen(true); setPhase('ready')
+    } catch (e) { if (active.current) { setPhase('error'); setMessage(`${notice}${notice ? ' ' : ''}${messageOf(e)}`) } }
+  }
+  const adopt = async (): Promise<void> => {
+    if (!data || picked.size === 0) return
+    setSaving(true); setMessage('')
+    try {
+      const params = Object.fromEntries(data.candidates.filter((c) => picked.has(c.id)).map((c) => [c.id, {
+        name: c.name, contextWindow: c.contextWindow, maxTokens: c.maxTokens, reasoning: c.reasoning === true,
+      }]))
+      const result = await postJson<{ adopted: string[] }>(`${BASE}/adopt`, { route, namespace: data.namespace, profileHash: data.profileHash, ids: [...picked], params })
+      if (!active.current) return
+      await run(`已追加并保存 ${result.adopted.length} 个模型；清单不代表推理已测通。`)
+    } catch (e) { if (active.current) setMessage(messageOf(e)) } finally { if (active.current) setSaving(false) }
+  }
+  const toggle = (id: string): void => setPicked((old) => {
+    const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next
+  })
+  const addable = data?.candidates.filter((c) => !c.configured) ?? []
+  return <div style={{ marginTop: 8 }}>
+    <div style={{ ...row, gap: 8 }}>
+      <button type="button" style={button} disabled={saving || phase === 'loading'} onClick={() => void run()}>
+        {phase === 'loading' ? '正在拉取…' : '从端点获取可用模型'}
+      </button>
+      {data && <span style={muted}>{data.candidates.length} 个清单候选 · 已配置 {data.configured.length} 个 · 端点 {data.endpoint}</span>}
+    </div>
+    {message && <div role="status" style={muted}>{message}</div>}
+    {data && open && phase !== 'loading' && <div style={{ marginTop: 8 }}>
+      <p style={muted}>清单仅证明端点列出这些 ID，不代表套餐权限、聊天用途或推理已验证；缺失容量沿用目录或 provider 默认值。未知能力可在手动模型编辑中确认。</p>
+      {data.partial && <p style={warning}>端点返回的是分页清单，可能不完整。</p>}
+      <div style={{ ...row, gap: 6 }}>
+        <button type="button" style={button} onClick={() => setPicked(new Set(addable.map((c) => c.id)))}>全选未配置</button>
+        <button type="button" style={button} onClick={() => setPicked(new Set())}>清空选择</button>
+        <button type="button" style={button} disabled={saving || picked.size === 0} onClick={() => void adopt()}>添加选中 {picked.size || ''}</button>
+        <button type="button" style={button} onClick={() => setOpen(false)}>收起</button>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginTop: 6 }}>
+        <thead><tr style={{ textAlign: 'left' }}>
+          <th style={{ padding: '4px 6px', width: 28 }} />
+          <th style={{ padding: '4px 6px' }}>模型</th>
+          <th style={{ padding: '4px 6px', width: 110 }}>上下文 / 输出</th>
+        </tr></thead>
+        <tbody>{data.candidates.map((c) => <tr key={c.id} style={{ borderTop: '1px solid var(--dsh-border, #333)', opacity: c.configured ? 0.55 : 1 }}>
+          <td style={{ padding: '4px 6px' }}><input type="checkbox" disabled={c.configured} checked={c.configured || picked.has(c.id)} onChange={() => toggle(c.id)} /></td>
+          <td style={{ padding: '4px 6px', overflowWrap: 'anywhere' }}><code>{c.id}</code>{c.reasoning ? <span style={muted}> · 思考</span> : null}{c.configured ? <span style={muted}> · 已配置</span> : null}</td>
+          <td style={{ padding: '4px 6px', whiteSpace: 'nowrap' }}>{fmtTokens(c.contextWindow)} / {fmtTokens(c.maxTokens)}</td>
+        </tr>)}</tbody>
+      </table>
+      {data.candidates.length === 0 && <p style={muted}>端点没有返回可用的聊天模型。</p>}
+    </div>}
+    {phase === 'error' && message && <div role="alert" style={failure}>{message}</div>}
   </div>
 }
 
@@ -444,6 +617,14 @@ export function apply(ctx: {
 }): void {
   ctx.slots.inject('settings.section', () => {
     if (ctx.slots.entries('settings.section').some((entry) => (entry as { id?: string }).id === 'model-refresh')) return () => undefined
-    return ctx.slots.register({ name: 'settings.section', id: 'model-refresh', order: 17, label: () => '模型刷新', inject: () => ({}) }, ModelRefreshSettings)
+    return ctx.slots.register({ name: 'settings.section', id: 'model-refresh', order: 17, label: () => '模型刷新（高级）', inject: () => ({}) }, ModelRefreshSettings)
+  })
+  ctx.slots.inject('settings.models.provider-card', () => {
+    // `settings.models.provider-card` is a keyed slot: the models page renders it with
+    // `{ entryKey: row.entry.settingsNs }`, and the renderer picks the occupant whose
+    // `options.key` equals that value. Every llm-pi-ai provider shares the namespace
+    // `llm-pi-ai`, so one registration keyed by it appears inside each of those cards.
+    if (ctx.slots.entries('settings.models.provider-card').some((entry) => (entry as { key?: string }).key === PI_AI_NAMESPACE)) return () => undefined
+    return ctx.slots.register({ name: 'settings.models.provider-card', key: PI_AI_NAMESPACE, order: 50, inject: () => ({}) }, ProviderFetch)
   })
 }

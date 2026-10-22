@@ -1,8 +1,8 @@
 {
   "name": "dsh-model-refresh",
   "displayName": "模型目录刷新（pi-ai 上游 → 路由）",
-  "version": "0.7.2",
-  "description": "独立模型数据源与官方清单发现，基于证据规划 pi-ai 补缺、待确认与宽限移除；可恢复目录事务、内容与修订所有权校验，附 provider 设置及监控。",
+  "version": "0.8.8",
+  "description": "在模型设置页从 provider 自己的 /models 端点拉取模型清单，选择后追加写入路由配置；附高级诊断与目录核对。",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KouzakiUmi/dsh-model-refresh.git"

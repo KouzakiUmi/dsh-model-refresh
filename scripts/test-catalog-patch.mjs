@@ -27,6 +27,7 @@ assert.deepStrictEqual(patched, ["gpt-6"]);
 assert.strictEqual(Object.keys(next["openai-responses"]).length, 3, "已有组必须保留原有条目（事故防回归）");
 assert.ok(next["openai-responses"]["gpt-5"] !== undefined && next["openai-responses"]["gpt-5b"] !== undefined);
 assert.strictEqual(next["openai-responses"]["gpt-6"].api, "openai-responses");
+assert.strictEqual(next["openai-responses"]["gpt-6"].type, "chat", "pi-ai 1.3 chat catalog reader filters by explicit model.type");
 assert.strictEqual(next["openai-responses"]["gpt-6"].baseUrl, undefined, "空组时 baseUrl 留空（物化走 providerBaseUrl）");
 console.log("applyCatalogPatch keeps existing groups ok");
 

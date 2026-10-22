@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { synchronizeCatalog, recoverCatalogTransactions } from '../lib/catalog-store.mjs';
+import { synchronizeCatalog, recoverCatalogTransactions, catalogHash } from '../lib/catalog-store.mjs';
 const dir = await mkdtemp(path.join(tmpdir(), 'refresh-store-'));
 console.log('isolated temp directory:', dir);
 try {
@@ -52,6 +52,55 @@ try {
   result = await synchronizeCatalog({ ...args, patchCatalog: false });
   assert.ok((await read())[base.api].adopted, 'same-content upstream adoption is protected by catalog revision');
   assert.ok(result.conflicts.some(v => v.includes('revision')));
+  // Typed catalogs must retain every non-chat row and use the same key format on write.
+  const typed = { [base.api]: { 'chat:base': base, 'embedding:base': { id: 'base', type: 'embedding', dimensions: 2048 } },
+    'image-generation': { 'image:paint': { id: 'paint', type: 'image', vendor: { untouched: true } } } };
+  state.runtime.catalogOwned = {}; state.runtime.catalogRemoved = {};
+  await writeFile(file, JSON.stringify(typed));
+  await synchronizeCatalog({ ...args, plan: { additions: [{ id: 'new', group: base.api, entry }] } });
+  const typedAfter = await read();
+  assert.deepEqual(typedAfter[base.api]['embedding:base'], typed[base.api]['embedding:base']);
+  assert.deepEqual(typedAfter['image-generation'], typed['image-generation']);
+  assert.deepEqual(typedAfter[base.api]['chat:new'], entry);
+  assert.equal(typedAfter[base.api].new, undefined);
+  await synchronizeCatalog({ ...args, enabled: false });
+  assert.deepEqual(await read(), typed, 'rollback restores typed chat rows without touching other kinds');
+  persistFail = true;
+  await assert.rejects(() => synchronizeCatalog({ ...args, plan: { additions: [{ id: 'new', group: base.api, entry }] } }), /state failure/);
+  persistFail = false;
+  const typedRecovery = { routes: state.routes, runtime: { catalogOwned: {}, catalogRemoved: {} } };
+  const external = await read(); external[base.api]['embedding:base'].dimensions = 4096;
+  await writeFile(file, JSON.stringify(external));
+  await assert.rejects(() => recoverCatalogTransactions({ dataDir, state: typedRecovery, stateDir: dir, persist }), /transaction conflict/,
+    'journal fingerprints include untouched non-chat data');
+  external[base.api]['embedding:base'].dimensions = 2048;
+  await writeFile(file, JSON.stringify(external));
+  await recoverCatalogTransactions({ dataDir, state: typedRecovery, stateDir: dir, persist });
+  assert.ok(typedRecovery.runtime.catalogOwned.test.some(record => record.id === 'new'));
+  // Historical v1 journals hashed the chat-only shape with non-chat/empty buckets dropped.
+  const journalFile = path.join(dir, 'transactions', 'test.json');
+  const logicalBefore = { [base.api]: { base } };
+  const logicalAfter = { [base.api]: { base, new: entry } };
+  for (const committed of [false, true]) {
+    const raw = structuredClone(typed);
+    if (committed) raw[base.api]['chat:new'] = entry;
+    await writeFile(file, JSON.stringify(raw));
+    await writeFile(journalFile, JSON.stringify({ version: 1, route: 'test', dataDir: path.resolve(dataDir),
+      beforeHash: catalogHash(logicalBefore), afterHash: catalogHash(logicalAfter),
+      nextOwned: [{ id: 'new', group: base.api, before: null, after: entry }], nextRemoved: {} }));
+    const legacyRecovery = { routes: state.routes, runtime: { catalogOwned: {}, catalogRemoved: {} } };
+    await recoverCatalogTransactions({ dataDir, state: legacyRecovery, stateDir: dir, persist });
+    assert.equal(legacyRecovery.runtime.catalogOwned.test?.length ?? 0, committed ? 1 : 0);
+    assert.deepEqual(await read(), raw, 'v1 recovery must not rewrite chat or non-chat data');
+    await assert.rejects(readFile(journalFile), error => error.code === 'ENOENT');
+  }
+  // Invalid chat keys/buckets must fail closed, not disappear during normalization.
+  for (const malformed of [{ [base.api]: { mismatch: base } }, { [base.api]: [] }, { [base.api]: { 'chat:base': base, base } }]) {
+    await writeFile(file, JSON.stringify(malformed));
+    const text = await readFile(file, 'utf8');
+    await assert.rejects(() => synchronizeCatalog({ ...args, plan: {} }), /catalog/);
+    assert.equal(await readFile(file, 'utf8'), text);
+  }
   console.log('STORE TESTS PASSED');
 } finally {
   // dir is verified mkdtemp return; never targets the real catalog or state.

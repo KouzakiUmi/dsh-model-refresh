@@ -180,6 +180,16 @@ try {
   assert.ok(!pendingArtifact.models.some((entry) => entry.id === 'discovered'));
   await pendingCase.host.dispose();
 
+  // Unverified metadata-only candidates remain visible without being served or adopted.
+  const unverifiedCase = await setup({ settings: { officialRoutes: { demo: { auth: 'none', endpoint: 'http://127.0.0.1:39999/list' } } },
+    fetchFn: async url => jsonResponse(url.includes('/list') ? { data: [{ id: 'old' }] } : { demo: { models: {
+      unlisted: { id: 'unlisted', mode: 'chat', limit: { context: 2000, output: 200 } } } } }) });
+  await unverifiedCase.host.requestRefresh();
+  assert.deepEqual(unverifiedCase.host.status().routes[0].unverified, ['unlisted']);
+  assert.ok(unverifiedCase.host.status().routes[0].modelList.some(model => model.id === 'unlisted' && model.state === 'unverified'));
+  assert.ok(!JSON.parse(await readFile(path.join(unverifiedCase.directory, 'demo.models.json'), 'utf8')).models.some(model => model.id === 'unlisted'));
+  await unverifiedCase.host.dispose();
+
   // Logical baseline remembers deletions across rounds; turning the switch off restores once.
   const staleCase = await setup({ settings: { patchCatalog: true, removeStale: true,
     officialRoutes: { demo: { auth: 'none', endpoint: 'http://127.0.0.1:39999/list', complete: true } } },

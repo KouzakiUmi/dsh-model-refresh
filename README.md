@@ -1,10 +1,14 @@
-# dsh-model-refresh · v0.7.2
+# dsh-model-refresh · v0.8.8
 
 将 pi-ai 静态模型目录的补缺做成可独立升级的 DSH bundle。目标不是把网上所有模型名称塞进选择器，而是补齐当前 provider 真正可用、且能正确物化的新模型。
 
-> 本次手动模型功能对照本机 DeepSeek Harness core `0.2.1-alpha.1` 的 configEditor 与 pi-ai 接口开发。应用配置需要目标核心提供这些接口；其它版本需要重新核对兼容性。源码回归测试不代表远端模型推理已验证。
+> 本次审查对照安装包中的 `@deepseek-ai/dsh-llm-pi-ai` 和 `@deepseek-ai/dsh-client-ui-settings-models` `0.2.1-rc.2` 契约，并核对 configEditor 文档。这是插件接口版本证据，不是运行中 Core 版本证明；其它版本需要重新核对兼容性。源码回归测试不代表远端模型推理或已加载页面已验证。
 
 ## 功能概览
+
+- 默认 `llm-pi-ai` 配置入口的模型页 provider 卡片提供「从端点获取可用模型」，只请求清单、由用户选择追加，不发送推理请求；高级批量核对独立保留。
+- 追加时保留已有显式模型；未配置 `models` 或配置空数组时先展开安装目录默认模型并保留 `modelOverrides`，不会把原模型缩成仅新增 ID。仅有 `reasoning: true` 不会生成推理档位。
+- 清单端点只取显式 `baseURL` 或安装目录中对应协议的唯一端点，不从第三方目录读取携带凭据的请求目标；清单列出不等于套餐权限或聊天能力已验证。
 
 - 直接读取最新发布的 pi-ai 模型目录；models.dev 仅作为可选备份源，默认关闭。
 - 对协议、上下文容量、输出容量和聊天用途缺少证据的新模型进入待确认，不使用邻居猜测。
@@ -136,7 +140,7 @@ pi-ai npm catalog ─> 精确 provider / model 匹配 ─┐
 ```
 
 - `endpoint` 是**完整清单 URL**，`baseUrl` 是**推理根 URL**，不要混用；未设置时使用唯一目录端点。
-- 凭据从环境变量或 DSH credentials 服务解析，状态中只保存名称；不保存真实密钥。
+- 凭据按 DSH credentials 服务 → 启动环境快照 → 当前进程环境解析，状态中只保存名称；不保存真实密钥。
 - `auth`：`bearer`（默认）、`anthropic`（x-api-key）、`none`（明确公开接口，不发送凭据）。带凭据的非 loopback 清单必须 HTTPS。
 - `protocol` 留空时，仅能继承唯一现有协议；多协议路由不凭名字猜。OpenAI SDK 不能证明使用 Responses。
 - `contextWindow` / `maxTokens` 是用户显式默认值，不是已测模型容量；可用于官方仅返回 ID 的补缺，界面提示此区别。
@@ -167,6 +171,8 @@ Program Files 的权限不足是**可诊断错误**，不是所有写入错误�
 - 同一安装目录建议只由一个配置状态管理。不同状态目录的多个 Host 不提供全局协调保证；更新/安装 pi-ai 时应停止插件消费者。非合作外部写者的检查与 rename 之间仍存在竞态，文件 API 不提供跨程序原子 CAS；不能声称绝对事务隔离。
 - 包或 manifest 修订不变、内容也完全相同的外部同版本重装无法区别所有权；检测到修订变化会保守释放，不删升级模型。
 - 旧台账保护/同步冲突需要人工核验，不能静默“清理”。损坏状态保持原文件不覆盖。
+- 旧版本若已丢失自动发现路由的 `discovered` 来源标记，插件无法区分它与手工停用路由，因而保留设置行；未声明且停用的无所有权路由会跳过刷新，不会为其发送请求。
+- 旧版本曾写入但缺少 `type: "chat"` 的目录补缺不会被本版自动改写，以免越过内容/包修订所有权边界。需要修复时，先关闭目录写入并刷新，确认自有条目回滚完成，再重新启用写入并刷新；若出现所有权或修订冲突，应人工核验，不要直接删除目录或日志。
 
 ## 验证
 
@@ -202,6 +208,10 @@ node scripts/smoke.mjs  # 安全别名：运行隔离 Host 场景，不连接真
 - `POST /plugins/dsh-model-refresh/refresh`
 - `POST /plugins/dsh-model-refresh/config`
 - `POST /plugins/dsh-model-refresh/route`
+- `POST /plugins/dsh-model-refresh/discover`：`{ route, namespace }`，返回清单候选、实际鉴权方式和 `profileHash`。仅有一个配置入口时可省略 `namespace`；协议不唯一时先显式配置 `api`。
+- `POST /plugins/dsh-model-refresh/adopt`：`{ route, namespace, profileHash, ids, params? }`，追加选中模型；ID 去重，原模型与元数据不改写。配置在发现后或提交前变化则返回 409，动态 `models` 不覆盖。成功即已由配置编辑服务保存，不需另按保存按钮。
+
+模型页按钮目前注册在默认 `llm-pi-ai` namespace；自定义入口可通过上述 API 显式指定，尚未实现为所有自定义 namespace 自动注册按钮。
 
 写操作要求精确同源 loopback Origin、`application/json`、64 KiB 最大请求体和 10 秒读取超时。`config` 支持 `expectedRevision` 乐观锁；第三方调用方不得绕过设置页暴露的安全限制。
 
