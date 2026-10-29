@@ -1,8 +1,23 @@
 {
   "name": "dsh-model-refresh",
   "displayName": "模型目录刷新（pi-ai 上游 → 路由）",
-  "version": "0.8.8",
-  "description": "在模型设置页从 provider 自己的 /models 端点拉取模型清单，选择后追加写入路由配置；附高级诊断与目录核对。",
+  "version": "0.8.9",
+  "description": "以 refresh-* 独立 provider 提供最新 pi-ai 模型目录，复用已安装协议能力，不改原路由或安装目录。",
+  "engines": { "node": ">=22.19.0", "dsh": "0.2.1-rc.3" },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-launch-environment": "0.2.1-rc.3",
+    "@earendil-works/pi-ai": "1.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-llm-pi-ai": { "optional": true },
+    "@deepseek-ai/dsh-credentials": { "optional": true },
+    "@deepseek-ai/dsh-launch-environment": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true }
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KouzakiUmi/dsh-model-refresh.git"
@@ -25,7 +40,8 @@
     "lib/",
     "cordis.patch.yml",
     "config.example.json",
-    "README.md"
+    "README.md",
+    "docs/"
   ],
   "keywords": [
     "dsh",

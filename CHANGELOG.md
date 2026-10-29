@@ -4,7 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-10-30
+
+### Added
+
+- 独立动态目录镜像：生产入口注册 `refresh-*` provider，复用安装版 pi-ai 协议实现与源路由连接信息，以完整上游模型快照补齐新 ID；不修改安装目录或源 provider 配置。
+- 完整模型记录缓存、协议兼容门禁、不可变 provider/profile 快照、注册冲突诊断，以及真实安装库的纯离线 adapter 契约预检。
+
+### Changed
+
+- 设置页收敛为镜像启停、源/镜像路由、实际注册状态和 pending 证据；去掉 catalog 授权/重启、通用手动 provider 编辑及原路由追加入口。
+- 旧 catalog 所有权及事务仅保留并警告，不在升级启动时自动恢复。旧 Host 仍保留用于迁移回归，不再由生产 `apply()` 启动。
+- 使用窄宿主 peer 契约和消费入口解析，避免加载插件自己的第二份 pi-ai；新模型要求的协议超过安装版能力时不冒充可推理。
+
 ### Fixed
+
+- 以官方 DSH Core `0.2.1-rc.3` 的发布源码重新核对镜像 Adapter 契约；模型目录的 `maxTokens` 保持能力上限，不再错误作为请求默认输出上限。
+- 镜像 Adapter 显式注入不持久化的凭据存储：不会借用源路由的 OAuth grant，任何写入或删除尝试都会明确失败。
 
 - 写入新版 `chat:<id>` catalog 时保留类型前缀、非聊天条目和未修改协议桶；事务指纹覆盖完整原始文档，拒绝损坏键名而非静默丢弃。新增目录条目显式写入 `type: "chat"`，避免 pi-ai 1.3 的聊天目录读取器忽略新模型。
 - 端点清单追加模型时保留隐式目录模型、空数组回退语义与 modelOverrides；去重 ID，拒绝过期配置和提交前动态 models 变更，不凭 reasoning 布尔值猜推理档位。

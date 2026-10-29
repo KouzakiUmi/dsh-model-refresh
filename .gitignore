@@ -9,6 +9,9 @@ node_modules/
 !.env.example
 *.local.json
 coverage/
+.test-tmp/
+/.work/catalog-supplement-dev-20261024/
+/.work/catalog-supplement-web-home-20261024/
 .DS_Store
 Thumbs.db
 

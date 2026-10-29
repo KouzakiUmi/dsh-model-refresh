@@ -21,7 +21,7 @@ The default test suite is offline. It uses fixtures, fake credentials, and tempo
 1. Keep discovery sources independent: one source failing must not erase another source's evidence.
 2. Do not infer protocol, context capacity, output capacity, chat capability, or authoritative absence from a model ID alone.
 3. Preserve existing native catalog metadata unless an explicit authoritative field is available.
-4. Keep catalog changes journaled and ownership-aware; never delete by ID-only historical ownership.
+4. Production mirrors must never write the installed catalog or source provider profiles. Retained legacy recovery code must remain journaled and ownership-aware; never delete by ID-only historical ownership.
 5. Hold the Host state lease until queued writes settle. Stale lock recovery must remain fail-closed unless the recorded PID is provably dead.
 6. Add a regression test for every lifecycle, recovery, parser, or planner fix.
 7. Run `pnpm run build:client` and `pnpm test` before submitting.
