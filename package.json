@@ -52,7 +52,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "undici": "^8.10.0"
+    "undici": "^8.12.2"
   },
   "devDependencies": {
     "@esbuild/win32-x64": "^0.25.12",
